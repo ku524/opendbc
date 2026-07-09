@@ -68,6 +68,11 @@ class HyundaiSafetyFlags(IntFlag):
   CANFD_LKA_STEER_MSG_ALT = 128
   FCEV_GAS = 256
   ALT_LIMITS_2 = 512
+  # Personal fork (Sonata LF Hybrid): car runs standard 'hyundai' safety but WHL_SPD11 (0x386)
+  # has no valid counter/checksum. This bit tells the panda safety RX check to skip 0x386 integrity
+  # (that message only) and derive vehicle_moving from TCS13 (0x394) StandStill instead.
+  # Value MUST match HYUNDAI_PARAM_ALT_STANDSTILL in opendbc/safety/modes/hyundai_common.h.
+  ALT_STANDSTILL = 1024
 
 
 # Hyundai/Kia/Genesis SCC (Smart Cruise Control) and steering architecture:
