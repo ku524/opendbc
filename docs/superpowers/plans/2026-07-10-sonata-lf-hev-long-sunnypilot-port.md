@@ -59,7 +59,7 @@ Confirmed by replaying the owner's route (`9f9b411a57b8ce21/00000001--d6d081f0e7
 
 **Files:** none (git setup)
 
-- [ ] **Step 1: Branch off the device-pinned commit**
+- [x] **Step 1: Branch off the device-pinned commit**
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
@@ -68,7 +68,7 @@ git rev-parse HEAD              # note the base commit (should be the device pin
 git checkout -b sonata-lf-hev-long-sp
 ```
 
-- [ ] **Step 2: Prime the env**
+- [x] **Step 2: Prime the env**
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
@@ -86,7 +86,7 @@ Expected: venv active, no error. If `setup.sh` differs, use `uv run` prefixes as
 **Interfaces:**
 - Produces: `HyundaiSafetyFlags.ALT_STANDSTILL = 1024`.
 
-- [ ] **Step 1: Confirm 1024 is free in sunnypilot's MAIN enum**
+- [x] **Step 1: Confirm 1024 is free in sunnypilot's MAIN enum**
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
@@ -94,7 +94,7 @@ rg -n "class HyundaiSafetyFlags" -A 14 opendbc/car/hyundai/values.py
 ```
 Expected: enum ends at `ALT_LIMITS_2 = 512` (identical to comma). If a fork delta already uses 1024 here, STOP and report — pick the next free bit and keep python/C in lockstep.
 
-- [ ] **Step 2: Add the member**
+- [x] **Step 2: Add the member**
 
 After `ALT_LIMITS_2 = 512` in `HyundaiSafetyFlags`:
 
@@ -107,7 +107,7 @@ After `ALT_LIMITS_2 = 512` in `HyundaiSafetyFlags`:
   ALT_STANDSTILL = 1024
 ```
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 ```bash
 python -c "from opendbc.car.hyundai.values import HyundaiSafetyFlags as F; \
@@ -116,7 +116,7 @@ assert len([f.value for f in F])==len({f.value for f in F}); print('OK 1024 free
 ```
 Expected: `OK 1024 free`
 
-- [ ] **Step 4: Commit** — `git add opendbc/car/hyundai/values.py && git commit -m "hyundai: add ALT_STANDSTILL safety flag (sunnypilot port)"`
+- [x] **Step 4: Commit** — `git add opendbc/car/hyundai/values.py && git commit -m "hyundai: add ALT_STANDSTILL safety flag (sunnypilot port)"`
 
 ---
 
@@ -128,7 +128,7 @@ Expected: `OK 1024 free`
 **Interfaces:**
 - Produces: C global `hyundai_alt_standstill`; `HYUNDAI_PARAM_ALT_STANDSTILL = 1024`.
 
-- [ ] **Step 1: Add the global** — after `bool hyundai_alt_limits_2 = false;` (~L50):
+- [x] **Step 1: Add the global** — after `bool hyundai_alt_limits_2 = false;` (~L50):
 
 ```c
 extern bool hyundai_alt_limits_2;
@@ -138,14 +138,14 @@ extern bool hyundai_alt_standstill;
 bool hyundai_alt_standstill = false;
 ```
 
-- [ ] **Step 2: Add the param const** — inside `hyundai_common_init`, after `const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;` (~L79):
+- [x] **Step 2: Add the param const** — inside `hyundai_common_init`, after `const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;` (~L79):
 
 ```c
   const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;
   const uint16_t HYUNDAI_PARAM_ALT_STANDSTILL = 1024;
 ```
 
-- [ ] **Step 3: Add the decode** — after `hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);` (~L87):
+- [x] **Step 3: Add the decode** — after `hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);` (~L87):
 
 ```c
   hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);
@@ -154,7 +154,7 @@ bool hyundai_alt_standstill = false;
 
 > Do NOT touch the SP param block (`hyundai_escc = GET_FLAG(current_safety_param_sp, ...)`). ALT_STANDSTILL is a MAIN-param flag.
 
-- [ ] **Step 4: Verify it compiles** (covered by Task 4 build). No standalone commit yet — commit with Task 3 since the two safety files build together. (Or commit now; either is fine.)
+- [x] **Step 4: Verify it compiles** (covered by Task 4 build). No standalone commit yet — commit with Task 3 since the two safety files build together. (Or commit now; either is fine.)
 
 ---
 
@@ -168,7 +168,7 @@ bool hyundai_alt_standstill = false;
 - Consumes: `HYUNDAI_COMMON_RX_CHECKS`, `hyundai_alt_standstill` (Task 2), `GET_BIT` (declarations.h:38, verified present).
 - Produces: relaxed-0x386 RX behavior + TCS13 standstill under the flag.
 
-- [ ] **Step 1: 2-param macro** — at the `#define HYUNDAI_COMMON_RX_CHECKS(legacy)` (~L41):
+- [x] **Step 1: 2-param macro** — at the `#define HYUNDAI_COMMON_RX_CHECKS(legacy)` (~L41):
 
 Change the signature and the 0x386 / 0x394 lines:
 ```c
@@ -180,7 +180,7 @@ Change the signature and the 0x386 / 0x394 lines:
 ```
 (0x260/0x371/0x251/0x4F1 lines unchanged.)
 
-- [ ] **Step 2: Update ALL 16 call sites**
+- [x] **Step 2: Update ALL 16 call sites**
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
@@ -196,7 +196,7 @@ grep -nE "HYUNDAI_COMMON_RX_CHECKS\((true|false)\)" opendbc/safety/modes/hyundai
 ```
 Expected: `all two-arg`
 
-- [ ] **Step 3: Longitudinal-branch alt_standstill array + selection**
+- [x] **Step 3: Longitudinal-branch alt_standstill array + selection**
 
 In `hyundai_init`, `if (hyundai_longitudinal)` block. The array `hyundai_long_rx_checks` is declared near L329-331; the selection is the if/else at ~L349-361:
 ```c
@@ -227,7 +227,7 @@ And make `if (hyundai_alt_standstill)` the OUTERMOST first condition of that sel
     }
 ```
 
-- [ ] **Step 4: Non-long radar-SCC alt_standstill array + selection**
+- [x] **Step 4: Non-long radar-SCC alt_standstill array + selection**
 
 In the non-long `else` branch (the default radar-SCC path, `hyundai_rx_checks` declared ~L381 with `HYUNDAI_SCC12_ADDR_CHECK(0)` + `HYUNDAI_SCC11_ADDR_CHECK(0)`). Add a sibling array that mirrors it exactly but with relaxed 0x386:
 ```c
@@ -242,7 +242,7 @@ In the non-long `else` branch (the default radar-SCC path, `hyundai_rx_checks` d
 (Match the exact addr-check lines present in the sibling `hyundai_rx_checks` — copy them verbatim; if sunnypilot's default array has only SCC12, include only SCC12. Route confirms SCC11 present, so both is correct if the sibling has both.)
 Make `if (hyundai_alt_standstill)` the outermost first condition of the non-long radar-SCC selection, ahead of the fcev/lda/non_scc nesting.
 
-- [ ] **Step 5: vehicle_moving from TCS13 in `hyundai_rx_hook`** (~L191-199)
+- [x] **Step 5: vehicle_moving from TCS13 in `hyundai_rx_hook`** (~L191-199)
 
 ```c
     // sample wheel speed, averaging opposite corners
@@ -262,21 +262,21 @@ Make `if (hyundai_alt_standstill)` the outermost first condition of the non-long
     }
 ```
 
-- [ ] **Step 6: Build the safety** — proves the macro refactor + new arrays compile:
+- [x] **Step 6: Build the safety** — proves the macro refactor + new arrays compile:
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc && scons -j8 opendbc/safety
 ```
 Expected: clean compile. A compile error = a missed/miswrapped call site (Step 2) or a wrong addr-check macro name (Step 4) — fix and rebuild.
 
-- [ ] **Step 7: Regression — existing hyundai safety tests still pass**
+- [x] **Step 7: Regression — existing hyundai safety tests still pass**
 
 ```bash
 python -m unittest opendbc.safety.tests.test_hyundai -v
 ```
 Expected: same count as before, all `ok`.
 
-- [ ] **Step 8: Commit** — `git add opendbc/safety/modes/hyundai.h opendbc/safety/modes/hyundai_common.h && git commit -m "hyundai/safety: ALT_STANDSTILL — relax 0x386, standstill from TCS13 (sunnypilot port)"`
+- [x] **Step 8: Commit** — `git add opendbc/safety/modes/hyundai.h opendbc/safety/modes/hyundai_common.h && git commit -m "hyundai/safety: ALT_STANDSTILL — relax 0x386, standstill from TCS13 (sunnypilot port)"`
 
 ---
 
@@ -285,7 +285,7 @@ Expected: same count as before, all `ok`.
 **Files:**
 - Modify: `$SP/opendbc/car/hyundai/values.py`, `interface.py`, `fingerprints.py`, `torque_data/substitute.toml`, `tests/routes.py`, `hyundai/tests/test_hyundai.py`
 
-- [ ] **Step 1: Platform config (values.py)** — after the `HYUNDAI_SONATA_LF` entry:
+- [x] **Step 1: Platform config (values.py)** — after the `HYUNDAI_SONATA_LF` entry:
 
 ```python
   # Personal fork: LF Hybrid on standard 'hyundai' safety with openpilot longitudinal.
@@ -303,11 +303,11 @@ First confirm `CAR.HYUNDAI_SONATA_LF` exists as the specs reference and `CAR.HYU
 rg -n "HYUNDAI_SONATA_LF\b|HYUNDAI_SONATA_LF_HYBRID" opendbc/car/hyundai/values.py
 ```
 
-- [ ] **Step 2: STEER_MAX bucket (values.py) — HAND-EDIT (wrapping differs from comma)**
+- [x] **Step 2: STEER_MAX bucket (values.py) — HAND-EDIT (wrapping differs from comma)**
 
 Add `CAR.HYUNDAI_SONATA_LF_HYBRID` to the `self.STEER_MAX = 255` tuple in place, right after `CAR.HYUNDAI_SONATA_LF`. Do not paste comma's reflowed hunk; insert the token into sunnypilot's existing line layout.
 
-- [ ] **Step 3: Safety param OR-in (interface.py) — in `_get_params`, NOT `_get_params_sp`**
+- [x] **Step 3: Safety param OR-in (interface.py) — in `_get_params`, NOT `_get_params_sp`**
 
 After the `if candidate == CAR.KIA_OPTIMA_G4_FL:` override:
 ```python
@@ -321,7 +321,7 @@ After the `if candidate == CAR.KIA_OPTIMA_G4_FL:` override:
 ```
 > CRITICAL: target `ret.safetyConfigs[-1].safetyParam` (MAIN param, same idiom as the LONG/HYBRID_GAS OR-ins). NOT `ret.safetyParam` in `_get_params_sp` (that is the SP space where 1024 has no meaning → car would fault 0x386 and never engage).
 
-- [ ] **Step 4: Fingerprint (fingerprints.py)** — add to `FW_VERSIONS` (match sunnypilot's `Ecu` import + dict shape):
+- [x] **Step 4: Fingerprint (fingerprints.py)** — add to `FW_VERSIONS` (match sunnypilot's `Ecu` import + dict shape):
 
 ```python
   CAR.HYUNDAI_SONATA_LF_HYBRID: {
@@ -335,16 +335,16 @@ After the `if candidate == CAR.KIA_OPTIMA_G4_FL:` override:
 ```
 > Do NOT add `0x2AB` (ESCC) or `0x391` (LDA) anywhere — both verified absent; adding them would trip sunnypilot auto-flags.
 
-- [ ] **Step 5: Torque substitution (substitute.toml)** — `"HYUNDAI_SONATA_LF_HYBRID" = "HYUNDAI_SONATA_LF"`
+- [x] **Step 5: Torque substitution (substitute.toml)** — `"HYUNDAI_SONATA_LF_HYBRID" = "HYUNDAI_SONATA_LF"`
 
-- [ ] **Step 6: Test route (opendbc/car/tests/routes.py)** — uses `HYUNDAI.` alias:
+- [x] **Step 6: Test route (opendbc/car/tests/routes.py)** — uses `HYUNDAI.` alias:
 ```python
   CarTestRoute("9f9b411a57b8ce21/00000001--d6d081f0e7", HYUNDAI.HYUNDAI_SONATA_LF_HYBRID),
 ```
 
-- [ ] **Step 7: EPS exclusion (hyundai/tests/test_hyundai.py) — HAND-EDIT (set wrapping differs)** — add `CAR.HYUNDAI_SONATA_LF_HYBRID` to the `no_eps_platforms` set literal in place.
+- [x] **Step 7: EPS exclusion (hyundai/tests/test_hyundai.py) — HAND-EDIT (wrapping differs)** — add `CAR.HYUNDAI_SONATA_LF_HYBRID` to the `no_eps_platforms` set literal in place.
 
-- [ ] **Step 8: Verify CarParams**
+- [x] **Step 8: Verify CarParams**
 
 ```bash
 python -c "
@@ -363,7 +363,7 @@ print('OK: hyundai safety, long ON, ALT_STANDSTILL set')
 Expected: `OK: hyundai safety, long ON, ALT_STANDSTILL set`
 (If `get_params` signature differs in sunnypilot, match `opendbc/car/tests/test_models.py`. If `_get_params_sp` unexpectedly flipped ESCC/NON_SCC on with an empty fingerprint, re-check Step 4.)
 
-- [ ] **Step 9: Car tests + zero-diff proof**
+- [x] **Step 9: Car tests + zero-diff proof**
 
 ```bash
 python -m pytest opendbc/car/hyundai/tests/test_hyundai.py -q
@@ -371,7 +371,7 @@ git diff --stat opendbc/car/hyundai/carcontroller.py opendbc/car/hyundai/hyundai
 ```
 Expected: car tests pass; zero diff on the three actuation files.
 
-- [ ] **Step 10: Commit** — `git add opendbc/car/hyundai/values.py opendbc/car/hyundai/interface.py opendbc/car/hyundai/fingerprints.py opendbc/car/torque_data/substitute.toml opendbc/car/tests/routes.py opendbc/car/hyundai/tests/test_hyundai.py && git commit -m "hyundai: register Sonata LF Hybrid with openpilot longitudinal (sunnypilot port)"`
+- [x] **Step 10: Commit** — `git add opendbc/car/hyundai/values.py opendbc/car/hyundai/interface.py opendbc/car/hyundai/fingerprints.py opendbc/car/torque_data/substitute.toml opendbc/car/tests/routes.py opendbc/car/hyundai/tests/test_hyundai.py && git commit -m "hyundai: register Sonata LF Hybrid with openpilot longitudinal (sunnypilot port)"`
 
 ---
 
@@ -380,14 +380,14 @@ Expected: car tests pass; zero diff on the three actuation files.
 **Files:**
 - Modify: `$SP/opendbc/safety/tests/test_hyundai.py`
 
-- [ ] **Step 1: Confirm the base class + helpers exist in sunnypilot**
+- [x] **Step 1: Confirm the base class + helpers exist in sunnypilot**
 
 ```bash
 rg -n "class TestHyundaiLongitudinalSafety\b|CANPackerSafety|libsafety_py|HyundaiSafetyFlags" opendbc/safety/tests/test_hyundai.py | head
 ```
 Expected: `TestHyundaiLongitudinalSafety`, `CANPackerSafety`, `libsafety_py`, `HyundaiSafetyFlags` all present (sunnypilot mirrors comma here).
 
-- [ ] **Step 2: Append the test class** — copy the `TestHyundaiLongitudinalSafetyAltStandstill` class verbatim from the reference branch:
+- [x] **Step 2: Append the test class** — copy the `TestHyundaiLongitudinalSafetyAltStandstill` class verbatim from the reference branch:
 ```bash
 git -C /Users/mark.yeon/Documents/work/oss/opendbc show sonata-lf-hev-long:opendbc/safety/tests/test_hyundai.py \
   | sed -n '/class TestHyundaiLongitudinalSafetyAltStandstill/,/^$/p'
@@ -395,21 +395,21 @@ git -C /Users/mark.yeon/Documents/work/oss/opendbc show sonata-lf-hev-long:opend
 (If the comma repo path is unavailable on this machine, the same class is in `2026-07-10-sonata-lf-hev-longitudinal.md` Task 3 Step 1 of this repo's own `docs/superpowers/plans/` — copy it from there instead.)
 Paste it before `if __name__` in `$SP/opendbc/safety/tests/test_hyundai.py`. It sets `HyundaiSafetyFlags.LONG | HYBRID_GAS | ALT_STANDSTILL`, overrides `_user_gas_msg` (E_EMS11), `_user_brake_msg`/`_vehicle_moving_msg` (TCS13), and asserts: 0x386 bad-integrity does not drop controls; TCS13 bad checksum IS rejected; vehicle_moving tracks TCS13.StandStill.
 
-- [ ] **Step 3: Run the new class**
+- [x] **Step 3: Run the new class**
 
 ```bash
 scons -j8 opendbc/safety && python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiLongitudinalSafetyAltStandstill -v
 ```
 Expected: all `ok`. If `set_safety_hooks` errors, ALT_STANDSTILL isn't decoded → recheck Tasks 2-3.
 
-- [ ] **Step 4: Full safety suite + coverage gate**
+- [x] **Step 4: Full safety suite + coverage gate**
 
 ```bash
 python -m unittest opendbc.safety.tests.test_hyundai -v && ./opendbc/safety/tests/test.sh
 ```
 Expected: all pass; `test.sh` MISRA + 100% coverage passes. (If sunnypilot's `test.sh` differs, run its documented safety-test entrypoint; ensure the new C branches are covered.)
 
-- [ ] **Step 5: Commit** — `git add opendbc/safety/tests/test_hyundai.py && git commit -m "hyundai/safety: test ALT_STANDSTILL path (sunnypilot port)"`
+- [x] **Step 5: Commit** — `git add opendbc/safety/tests/test_hyundai.py && git commit -m "hyundai/safety: test ALT_STANDSTILL path (sunnypilot port)"`
 
 ---
 
@@ -418,7 +418,7 @@ Expected: all pass; `test.sh` MISRA + 100% coverage passes. (If sunnypilot's `te
 **Files:**
 - Create: `$SP/opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py`
 
-- [ ] **Step 1: Copy the reference replay script**
+- [x] **Step 1: Copy the reference replay script**
 
 ```bash
 git -C /Users/mark.yeon/Documents/work/oss/opendbc show \
@@ -428,7 +428,7 @@ git -C /Users/mark.yeon/Documents/work/oss/opendbc show \
 (If the comma repo path is unavailable, the full script is in this repo's own `2026-07-10-sonata-lf-hev-longitudinal.md` Task 5 Step 1 — copy it from there instead.)
 It reads the 3 local rlog segments, builds the interface with `alpha_long=True`, asserts CarParams (hyundai safety, long ON, LONG|HYBRID_GAS|ALT_STANDSTILL) + parses CarState + re-asserts StandStill polarity.
 
-- [ ] **Step 2: Run it**
+- [ ] **Step 2: Run it** — deferred on this machine: the owner's three local rlog segments are unavailable.
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
@@ -436,7 +436,7 @@ uv run --with zstandard python opendbc/car/hyundai/tests/replay_sonata_lf_hybrid
 ```
 Expected: ends `ALL OFFLINE CHECKS PASSED`. If `get_params`/`interfaces` import differs in sunnypilot, adjust the two import lines to match sunnypilot's `car_helpers` API (behavior identical). Requires the owner's 3 local route segments (see the companion plan's Prerequisites) present on this machine.
 
-- [ ] **Step 3: Commit** — `git add opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py && git commit -m "hyundai: offline replay for Sonata LF Hybrid long (sunnypilot port)"`
+- [x] **Step 3: Commit** — `git add opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py && git commit -m "hyundai: offline replay for Sonata LF Hybrid long (sunnypilot port)"`
 
 ---
 
