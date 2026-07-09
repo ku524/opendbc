@@ -152,6 +152,10 @@ class CarInterface(CarInterfaceBase):
     if candidate == CAR.KIA_OPTIMA_G4_FL:
       ret.steerActuatorDelay = 0.2
 
+    # WHL_SPD11 lacks valid integrity on this platform; TCS13 provides standstill instead.
+    if candidate == CAR.HYUNDAI_SONATA_LF_HYBRID:
+      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_STANDSTILL.value
+
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
     if candidate in (CAR.KIA_OPTIMA_H,):
