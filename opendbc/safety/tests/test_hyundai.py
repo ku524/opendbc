@@ -584,5 +584,106 @@ class TestHyundaiNonSCCSafety_HEV_EV(TestHyundaiSafety):
     return self.packer.make_can_msg_safety(self.GAS_MSG[0], 0, values, fix_checksum=checksum)
 
 
+class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
+  """
+    CAR.HYUNDAI_SONATA_LF_HYBRID (personal fork): non-legacy 'hyundai' safety with openpilot
+    longitudinal. WHL_SPD11 (0x386) has no valid counter/checksum on this car, so
+    HyundaiSafetyFlags.ALT_STANDSTILL exempts 0x386 from RX integrity and sources vehicle_moving
+    from TCS13 (0x394) StandStill instead. TCS13 keeps full integrity checks; it carries both the
+    brake (DriverOverride) and the standstill bit, so we model them together in one message.
+  """
+  cnt_tcs13 = 0
+
+  def setUp(self):
+    self.packer = CANPackerSafety("hyundai_can_generated")
+    self.safety = libsafety_py.libsafety
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai,
+                                 HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.HYBRID_GAS |
+                                 HyundaiSafetyFlags.ALT_STANDSTILL)
+    self.safety.init_tests()
+    # TCS13 (0x394) carries both brake and standstill; track both so the two helpers emit a
+    # single consistent message instead of clobbering each other.
+    self._brake = False
+    self._standstill = True
+
+  # hybrid gas comes from E_EMS11 (0x371)
+  def _user_gas_msg(self, gas):
+    values = {"CR_Vcu_AccPedDep_Pos": gas}
+    return self.packer.make_can_msg_safety("E_EMS11", 0, values, fix_checksum=checksum)
+
+  def _tcs13_msg(self):
+    values = {"DriverOverride": 2 if self._brake else 0,
+              "StandStill": 1 if self._standstill else 0,
+              "AliveCounterTCS": self.__class__.cnt_tcs13 % 8}
+    self.__class__.cnt_tcs13 += 1
+    return self.packer.make_can_msg_safety("TCS13", 0, values, fix_checksum=checksum)
+
+  def _user_brake_msg(self, brake):
+    self._brake = bool(brake)
+    return self._tcs13_msg()
+
+  # ALT_STANDSTILL: vehicle_moving is TCS13.StandStill, not WHL_SPD11
+  def _vehicle_moving_msg(self, speed):
+    self._standstill = speed <= self.STANDSTILL_THRESHOLD
+    return self._tcs13_msg()
+
+  def _whl_spd_bad_integrity_msg(self):
+    # Mimic this car's WHL_SPD11 (0x386): frozen counter + invalid checksum (flip checksum bits).
+    values = {"WHL_SPD_%s" % s: 20.0 for s in ["FL", "FR", "RL", "RR"]}
+    values["WHL_SPD_AliveCounter_LSB"] = 0
+    values["WHL_SPD_AliveCounter_MSB"] = 0
+
+    def corrupt(msg):
+      addr, dat, bus = checksum(msg)
+      dat = bytearray(dat)
+      dat[5] ^= 0xC0  # WHL_SPD11 checksum bits live in byte 5 high bits -> make invalid
+      return addr, bytes(dat), bus
+    return self.packer.make_can_msg_safety("WHL_SPD11", 0, values, fix_checksum=corrupt)
+
+  def test_whl_spd_bad_integrity_allowed(self):
+    # 0x386 lacks valid counter/checksum on this car; RX must NOT drop controls under ALT_STANDSTILL
+    self.safety.set_controls_allowed(True)
+    for _ in range(10):  # > MAX_WRONG_COUNTERS
+      self.assertTrue(self._rx(self._whl_spd_bad_integrity_msg()))
+      self.assertTrue(self.safety.get_controls_allowed())
+
+  def test_non_long_whl_spd_bad_integrity_allowed(self):
+    # ALT_STANDSTILL is set per platform even when Alpha Long is off, so lateral-only safety must
+    # also relax 0x386 while keeping TCS13 as the standstill/brake source.
+    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.HYBRID_GAS | HyundaiSafetyFlags.ALT_STANDSTILL)
+    self.safety.init_tests()
+    self._brake = False
+    self._standstill = True
+
+    self.safety.set_controls_allowed(True)
+    for _ in range(10):  # > MAX_WRONG_COUNTERS
+      self.assertTrue(self._rx(self._whl_spd_bad_integrity_msg()))
+      self.assertTrue(self.safety.get_controls_allowed())
+
+    def bad_tcs13(msg):
+      addr, dat, bus = checksum(msg)
+      dat = bytearray(dat)
+      dat[6] ^= 0x0F
+      return addr, bytes(dat), bus
+    msg = self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": 0}, fix_checksum=bad_tcs13)
+    self.assertFalse(self._rx(msg))
+
+  def test_tcs13_integrity_still_required(self):
+    # 0x394 must stay strict: a bad checksum on TCS13 is rejected (not relaxed by ALT_STANDSTILL)
+    def bad(msg):
+      addr, dat, bus = checksum(msg)
+      dat = bytearray(dat)
+      dat[6] ^= 0x0F  # corrupt TCS13 checksum nibble
+      return addr, bytes(dat), bus
+    m = self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": 0}, fix_checksum=bad)
+    self.assertFalse(self._rx(m))
+
+  def test_vehicle_moving_from_tcs13(self):
+    self._rx(self._vehicle_moving_msg(0.0))
+    self.assertFalse(self.safety.get_vehicle_moving())      # StandStill=1 -> not moving
+    self._rx(self._vehicle_moving_msg(self.STANDSTILL_THRESHOLD + 1))
+    self.assertTrue(self.safety.get_vehicle_moving())       # StandStill=0 -> moving
+
+
 if __name__ == "__main__":
   unittest.main()
