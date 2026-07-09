@@ -38,11 +38,11 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
   {0x389, 0,       8, .check_relay = true},   /* SCC14 Bus 0       */ \
   {0x4A2, 0,       2, .check_relay = false},  /* FRT_RADAR11 Bus 0 */ \
 
-#define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
+#define HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)                                                                                                                            \
   {.msg = {{0x260, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true},                                                                                           \
            {0x371, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},                                                    \
-  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (legacy), .ignore_counter = (legacy), .max_counter = (legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
-  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (legacy), .ignore_counter = (legacy), .max_counter = (legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
+  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (whl_legacy), .ignore_counter = (whl_legacy), .max_counter = (whl_legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
+  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (tcs13_legacy), .ignore_counter = (tcs13_legacy), .max_counter = (tcs13_legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
   {.msg = {{0x251, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                              \
   {.msg = {{0x4F1, 0, 4, 50U, .ignore_checksum = true, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                                  \
 
@@ -188,7 +188,7 @@ static void hyundai_rx_hook(const CANPacket_t *msg) {
     }
 
     // sample wheel speed, averaging opposite corners
-    if (msg->addr == 0x386U) {
+    if ((msg->addr == 0x386U) && !hyundai_alt_standstill) {
       uint32_t front_left_speed = GET_BYTES(msg, 0, 2) & 0x3FFFU;
       uint32_t rear_right_speed = GET_BYTES(msg, 6, 2) & 0x3FFFU;
       vehicle_moving = (front_left_speed > HYUNDAI_STANDSTILL_THRSLD) || (rear_right_speed > HYUNDAI_STANDSTILL_THRSLD);
@@ -196,6 +196,11 @@ static void hyundai_rx_hook(const CANPacket_t *msg) {
 
     if (msg->addr == 0x394U) {
       brake_pressed = ((msg->data[5] >> 5U) & 0x3U) == 0x2U;
+      // Personal fork (Sonata LF Hybrid): 0x386 lacks integrity; TCS13.StandStill (bit 47) is the
+      // integrity-valid standstill source. StandStill == 1 means stopped (verified on owner route).
+      if (hyundai_alt_standstill) {
+        vehicle_moving = !GET_BIT(msg, 47U);
+      }
     }
 
     if (msg->addr == 0x592U) {
@@ -327,26 +332,34 @@ static safety_config hyundai_init(uint16_t param) {
   if (hyundai_longitudinal) {
     // Use CLU11 (buttons) to manage controls allowed instead of SCC cruise state
     static RxCheck hyundai_long_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
     };
 
     static RxCheck hyundai_lda_button_long_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
     };
 
     static RxCheck hyundai_fcev_long_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_FCEV_GAS_ADDR_CHECK
     };
 
     static RxCheck hyundai_fcev_lda_button_long_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_FCEV_GAS_ADDR_CHECK
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
     };
 
-    if (hyundai_fcev_gas_signal) {
+    // Personal fork (Sonata LF Hybrid): WHL_SPD11 (0x386) has no valid counter/checksum on this
+    // car. Relax 0x386 integrity ONLY (0x394/TCS13 stays strict); vehicle_moving comes from TCS13.
+    static RxCheck hyundai_long_alt_standstill_rx_checks[] = {
+      HYUNDAI_COMMON_RX_CHECKS(true, false)
+    };
+
+    if (hyundai_alt_standstill) {
+      SET_RX_CHECKS(hyundai_long_alt_standstill_rx_checks, ret);
+    } else if (hyundai_fcev_gas_signal) {
       if (hyundai_has_lda_button) {
         SET_RX_CHECKS(hyundai_fcev_lda_button_long_rx_checks, ret);
       } else {
@@ -369,7 +382,7 @@ static safety_config hyundai_init(uint16_t param) {
 
   } else if (hyundai_camera_scc) {
     static RxCheck hyundai_cam_scc_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_SCC12_ADDR_CHECK(2)
       HYUNDAI_SCC11_ADDR_CHECK(2)
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
@@ -378,27 +391,27 @@ static safety_config hyundai_init(uint16_t param) {
     ret = BUILD_SAFETY_CFG(hyundai_cam_scc_rx_checks, HYUNDAI_CAMERA_SCC_TX_MSGS);
   } else {
     static RxCheck hyundai_rx_checks[] = {
-       HYUNDAI_COMMON_RX_CHECKS(false)
+       HYUNDAI_COMMON_RX_CHECKS(false, false)
        HYUNDAI_SCC12_ADDR_CHECK(0)
        HYUNDAI_SCC11_ADDR_CHECK(0)
     };
 
     static RxCheck hyundai_lda_button_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_SCC12_ADDR_CHECK(0)
       HYUNDAI_SCC11_ADDR_CHECK(0)
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
     };
 
     static RxCheck hyundai_fcev_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_SCC12_ADDR_CHECK(0)
       HYUNDAI_SCC11_ADDR_CHECK(0)
       HYUNDAI_FCEV_GAS_ADDR_CHECK
     };
 
     static RxCheck hyundai_fcev_lda_button_rx_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_SCC12_ADDR_CHECK(0)
       HYUNDAI_SCC11_ADDR_CHECK(0)
       HYUNDAI_FCEV_GAS_ADDR_CHECK
@@ -406,38 +419,48 @@ static safety_config hyundai_init(uint16_t param) {
     };
 
     static RxCheck hyundai_non_scc_addr_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
     };
 
     static RxCheck hyundai_non_scc_lda_button_addr_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
     };
 
     static RxCheck hyundai_hev_non_scc_addr_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_NON_SCC_HEV_ADDR_CHECK
     };
 
     static RxCheck hyundai_hev_non_scc_lda_button_addr_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_NON_SCC_HEV_ADDR_CHECK
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
     };
 
     static RxCheck hyundai_ev_non_scc_addr_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_NON_SCC_EV_ADDR_CHECK
     };
 
     static RxCheck hyundai_ev_non_scc_lda_button_addr_checks[] = {
-      HYUNDAI_COMMON_RX_CHECKS(false)
+      HYUNDAI_COMMON_RX_CHECKS(false, false)
       HYUNDAI_NON_SCC_EV_ADDR_CHECK
       HYUNDAI_LDA_BUTTON_ADDR_CHECK
     };
 
+    // ALT_STANDSTILL is per-platform, not per-longitudinal-control. Keep lateral-only mode usable
+    // when Alpha Long is off by relaxing only WHL_SPD11 (0x386); SCC11/SCC12 and TCS13 stay strict.
+    static RxCheck hyundai_alt_standstill_rx_checks[] = {
+      HYUNDAI_COMMON_RX_CHECKS(true, false)
+      HYUNDAI_SCC12_ADDR_CHECK(0)
+      HYUNDAI_SCC11_ADDR_CHECK(0)
+    };
+
     SET_TX_MSGS(HYUNDAI_TX_MSGS, ret);
-    if (hyundai_fcev_gas_signal) {
+    if (hyundai_alt_standstill) {
+      SET_RX_CHECKS(hyundai_alt_standstill_rx_checks, ret);
+    } else if (hyundai_fcev_gas_signal) {
       if (hyundai_has_lda_button) {
         SET_RX_CHECKS(hyundai_fcev_lda_button_rx_checks, ret);
       } else {
@@ -477,7 +500,7 @@ static safety_config hyundai_init(uint16_t param) {
 static safety_config hyundai_legacy_init(uint16_t param) {
   // older hyundai models have less checks due to missing counters and checksums
   static RxCheck hyundai_legacy_rx_checks[] = {
-    HYUNDAI_COMMON_RX_CHECKS(true)
+    HYUNDAI_COMMON_RX_CHECKS(true, true)
     HYUNDAI_SCC12_ADDR_CHECK(0)
     HYUNDAI_SCC11_ADDR_CHECK(0)
   };
