@@ -78,3 +78,13 @@
 실제 주행은 에이전트가 수행하지 않는다. 사용자가 운전하고, 에이전트는 단계별 체크리스트와 로그 분석만 제공해. 첫 시험은 폐쇄된 안전 공간, 최저 속도, 브레이크 즉시 조작 자세로 제한해. openpilot longitudinal 중 factory AEB가 비활성일 수 있음을 매 gate에서 명시해.
 
 각 단계마다 실행 명령, 관측 결과, 확인된 사실, 미확인 항목, 다음 수동 승인 gate를 짧게 보고해. 작업을 source 수정이나 추가 테스트로 전환하기 전에 그것이 이 차량의 실제 blocker인지 먼저 입증해.
+
+## F. Live diagnostics 금지
+
+- 실차 runtime 검증 중 임시 Python `SubMaster`/`SubSocket`, 반복 실행하는 live monitor, health monitor를 만들지 마.
+- comma msgq는 service당 reader slot이 15개다. subscriber 생성은 slot count를 증가시키지만 subscriber 종료는 mmap만 닫고 count를 감소시키지 않는다. 16번째 subscriber는 해당 service의 모든 subscriber를 reset/evict한다.
+- 짧은 monitor라도 반복 재실행하면 `selfdrived`, `radard` 등 정상 process의 구독을 끊어 `communication issue between processes`, service invalid, process 재연결을 유발할 수 있다. 이것은 관측 노이즈가 아니라 관측자가 시스템을 망가뜨리는 measurement contamination이다.
+- 실시간 검증은 기존 process log, Params 직접 읽기, panda 상태, 저장된 qlog/rlog를 우선한다. CAN·controls·service-validity 분석은 route 종료 후 qlog/rlog로 수행한다.
+- live subscriber가 꼭 필요하면 사용자 승인 후 하나의 장기 실행 process만 사용하고 재실행하지 마. 구독 service, PID, 시작·종료 시각을 기록해. 그 세션은 최종 safety/validity 증거로 사용하지 마.
+- 임시 subscriber를 한 번이라도 반복 실행했거나 eviction이 의심되면 monitor를 모두 종료하고 full vehicle OFF/ON 후 새 route에서 다시 검증해. 오염된 세션에서 production source를 수정하거나 root cause를 판정하지 마.
+- 2026-07-11 실패 기록과 소스 근거는 `2026-07-11-sonata-lf-hev-long-device-handoff.md`의 `Diagnostic Monitoring Hazard`를 먼저 읽어.

@@ -124,6 +124,32 @@ Do not merge this into the opendbc PR. It belongs to the main sunnypilot reposit
 
 Required decision test: clean vehicle boot, no external message subscribers, compare original and candidate `radard.py` under the same drive conditions. Until that A/B closes the loop, preserve the candidate only as a separate main-repo experiment.
 
+### Diagnostic Monitoring Hazard
+
+The harmful monitor was not a required openpilot process or a specific product named `live monitor`. It was the family of short-lived diagnostic Python loops repeatedly creating `messaging.SubMaster` subscribers to inspect service health and timing.
+
+This was an observer-induced failure:
+
+1. msgq defines `NUM_READERS` as 15 per service.
+2. Every new subscriber increments `num_readers` and claims the next slot.
+3. Subscriber destruction calls `msgq_close_queue`, which only unmaps memory. It does not decrement `num_readers` or release the slot.
+4. When a new subscriber would exceed 15, `msgq_init_subscriber` sets `num_readers` to zero, invalidates every reader, clears every reader UID, and signals the existing readers.
+5. Repeated one-shot monitors therefore accumulated slots and eventually evicted healthy production subscribers. Their reconnects and temporary invalid services produced the intermittent communication symptoms being measured.
+
+Pinned upstream source evidence:
+
+- [`NUM_READERS = 15`](https://github.com/commaai/msgq/blob/2d7d5d9e9da4cb1ec5ace0351bfe234a1cf00741/msgq/msgq.h#L9)
+- [`msgq_close_queue` only unmaps](https://github.com/commaai/msgq/blob/2d7d5d9e9da4cb1ec5ace0351bfe234a1cf00741/msgq/msgq.cc#L150-L154)
+- [subscriber overflow resets and evicts all readers](https://github.com/commaai/msgq/blob/2d7d5d9e9da4cb1ec5ace0351bfe234a1cf00741/msgq/msgq.cc#L184-L230)
+
+Rules for every future device session:
+
+- Do not create ad hoc `SubMaster` or `SubSocket` monitors during stationary or driving validation.
+- Prefer existing process logs, direct Params reads, panda state, and offline qlog/rlog analysis.
+- If a live subscriber is unavoidable, obtain approval, run one long-lived process once, and record its subscribed services, PID, and lifetime. Do not restart it.
+- Treat a session touched by repeated subscribers or any eviction as contaminated. Stop the monitors, perform a full vehicle OFF/ON cycle, and collect a new route before drawing safety, validity, timing, or root-cause conclusions.
+- Never change production polling or readiness code in response to symptoms first observed in a contaminated session. Reproduce on a clean boot without external subscribers first.
+
 ### Runtime Params
 
 `AlphaLongitudinalEnabled` and `OffroadMode` were changed through sunnypilot settings during deployment and validation. These are runtime state, not PR source. The copied one-byte snapshots preserve the handoff state.
@@ -135,6 +161,25 @@ Required decision test: clean vehicle boot, no external message subscribers, com
 - Repeated diagnostic SubMaster processes: stopped. They were not source edits and must not be restarted during clean validation.
 
 None of these reverted experiments belongs in the personal PR.
+
+## Current Draft PR Is Not Yet the Deployable Unit
+
+GitHub draft PR [`ku524/opendbc#1`](https://github.com/ku524/opendbc/pull/1) is open with head `e5a55c9e` and base `ffa13083`. The vehicle-tested branch is `sonata-lf-hev-long-sp-device-b971` at `f62fb8fe`, based on common ancestor `b9712d20`.
+
+The draft PR is not identical to the vehicle-tested source:
+
+- The deployed `383e9dbd` LKAS HUD preservation change in `hyundaican.py` is absent from PR head `e5a55c9e`.
+- The device-tested branch is only local and in the verified bundle; it is not pushed to the fork.
+- The long road test ran with the separate main-repository `radard.py` candidate active. Its necessity is unproven, and a clean original-radard A/B has not yet proved PR-only runtime equivalence.
+
+Therefore the current draft PR alone is not yet a proven recipe for another comma 3X. Before making that claim:
+
+1. Integrate the deployed HUD fix and reconcile the device-tested commits with PR head.
+2. Run the focused opendbc test gates from the consolidated PR revision.
+3. Restore original `radard.py`, perform a full vehicle OFF/ON cycle, and validate without external message subscribers.
+4. Record a clean PR-only on-car route with the same radar-disable, SCC, panda, override, and service-validity gates.
+
+Even after the PR becomes the complete source unit, another comma 3X still requires operational deployment: use a compatible sunnypilot revision, install the PR opendbc revision into `opendbc_repo`, rebuild, verify panda auto-reflash, enable Alpha Longitudinal, perform the required vehicle ignition cycle, and repeat the stationary safety gates. Merging or checking out the PR does not by itself flash panda firmware or enable the runtime setting.
 
 ## Objective Road-Test Result
 

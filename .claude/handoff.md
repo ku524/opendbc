@@ -31,6 +31,8 @@
 
 - `radard.py` is not part of opendbc and its necessity is unproven. Preserve it, but do not merge it before a clean-boot A/B with no diagnostic message subscribers.
 - The intermittent communication issue correlated with diagnostic SubMaster reader-slot exhaustion and stopped when those subscribers stopped. Original radard had already passed a clean 225-second session.
+- The harmful "live monitor" was repeated short-lived Python `SubMaster` diagnostics. msgq has 15 reader slots per service, subscriber close does not release a slot, and the 16th subscription evicts all readers. Never repeat live subscribers during validation; use offline qlog/rlog. Any touched session is contaminated until a full vehicle OFF/ON cycle and new route.
+- Draft PR `ku524/opendbc#1` at `e5a55c9e` is not yet identical to deployed `f62fb8fe`: the deployed LKAS HUD preservation change is absent, the device branch is unpushed, and PR-only runtime with original radard has not completed a clean A/B.
 - Do not commit panda binaries, Params, logs, or reverted diagnostic patches to the personal PR.
 - Do not comma-reboot while vehicle ignition stays on after radar disable. Use a full vehicle OFF/ON cycle to reset the radar ECU.
 
