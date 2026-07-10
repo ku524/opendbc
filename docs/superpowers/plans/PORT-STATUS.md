@@ -3,7 +3,7 @@
 **Branch:** `sonata-lf-hev-long-sp`
 **Base commit:** `ffa13083` (sunnypilot/opendbc master)
 **Baseline implementation HEAD:** `675f988d`
-**Review-hardened implementation:** latest branch HEAD
+**Review-hardened implementation:** `e68ba8dff71803403454046902f4ccb1542f7956`
 
 ## Done (committed)
 
@@ -15,8 +15,11 @@
 | Task 4 | `6aefd30d` | Registered `HYUNDAI_SONATA_LF_HYBRID` and wired the MAIN safety param |
 | Task 5 | `92116d81` | Added long/non-long ALT_STANDSTILL safety coverage |
 | Task 6 | `1cf8c8cb` | Added the sunnypilot-compatible offline replay script |
+| Review hardening | `e68ba8df` | Pinned and snapshotted canonical replay inputs, validated TCS13/timeline/cadence, and added negative controls |
 
 ## Verification
+
+The following results were rerun from the immutable hardening revision `e68ba8dff71803403454046902f4ccb1542f7956`:
 
 - `opendbc.safety.tests.test_hyundai`: 1,935 tests passed, 208 skipped.
 - `opendbc/safety/tests/test.sh`: 8,418 tests passed, 911 skipped; checked C files reached 100% line coverage.
