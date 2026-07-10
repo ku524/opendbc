@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass
 import hashlib
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -32,6 +33,16 @@ class TestReplayInputValidation(unittest.TestCase):
     path = self.directory / f"{route_file_prefix}--{segment}--rlog.zst"
     path.write_bytes(f"segment-{segment}".encode())
     return path
+
+  def empty_segment_path(self, segment: int) -> Path:
+    path = self.directory / f"{replay.ROUTE_FILE_PREFIX}--{segment}--rlog.zst"
+    path.write_bytes(b"")
+    return path
+
+  @staticmethod
+  def run_under_optimization(paths: list[Path]) -> subprocess.CompletedProcess[str]:
+    command = [sys.executable, "-O", str(Path(replay.__file__)), *(str(path) for path in paths)]
+    return subprocess.run(command, capture_output=True, check=False, text=True)
 
   @staticmethod
   def expected_hashes(paths: list[Path]) -> dict[int, str]:
@@ -97,18 +108,28 @@ class TestReplayInputValidation(unittest.TestCase):
     with self.assertRaises(replay.ReplayValidationError):
       replay.validate_segment_paths([str(path) for path in paths])
 
-  def test_dev_null_fails_under_optimization(self):
-    command = [sys.executable, "-O", str(Path(replay.__file__)), "/dev/null"]
-    completed = subprocess.run(command, capture_output=True, check=False, text=True)
+  def test_wrong_segment_count_fails_under_optimization(self):
+    completed = self.run_under_optimization([self.segment_path(0)])
     self.assertNotEqual(completed.returncode, 0)
     self.assertNotIn("ALL OFFLINE CHECKS PASSED", completed.stdout)
+    self.assertIn("expected exactly three segments", completed.stderr)
 
-  def test_named_empty_rlogs_fail_under_optimization(self):
-    paths = [self.segment_path(segment) for segment in (0, 2, 3)]
-    command = [sys.executable, "-O", str(Path(replay.__file__)), *(str(path) for path in paths)]
-    completed = subprocess.run(command, capture_output=True, check=False, text=True)
+  def test_zero_byte_canonical_rlogs_fail_under_optimization(self):
+    paths = [self.empty_segment_path(segment) for segment in (0, 2, 3)]
+    completed = self.run_under_optimization(paths)
     self.assertNotEqual(completed.returncode, 0)
     self.assertNotIn("ALL OFFLINE CHECKS PASSED", completed.stdout)
+    self.assertIn("segment 0 SHA-256 does not match the canonical route", completed.stderr)
+
+  def test_dev_null_symlinks_with_canonical_names_fail_under_optimization(self):
+    paths = [self.directory / f"{replay.ROUTE_FILE_PREFIX}--{segment}--rlog.zst" for segment in (0, 2, 3)]
+    for path in paths:
+      path.symlink_to(os.devnull)
+
+    completed = self.run_under_optimization(paths)
+    self.assertNotEqual(completed.returncode, 0)
+    self.assertNotIn("ALL OFFLINE CHECKS PASSED", completed.stdout)
+    self.assertIn("segment is not a regular file", completed.stderr)
 
 
 class TestFreshStandstillPairing(unittest.TestCase):

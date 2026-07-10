@@ -599,15 +599,15 @@ class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
     self.safety = libsafety_py.libsafety
     self._configure_alt_standstill(longitudinal=True)
 
-  def _configure_alt_standstill(self, longitudinal, enabled=True):
-    safety_param = HyundaiSafetyFlags.HYBRID_GAS
+  def _configure_alt_standstill(self, longitudinal, enabled=True, main_flags=0, sp_flags=HyundaiSafetyFlagsSP.DEFAULT):
+    safety_param = HyundaiSafetyFlags.HYBRID_GAS | main_flags
     if longitudinal:
       safety_param |= HyundaiSafetyFlags.LONG
     if enabled:
       safety_param |= HyundaiSafetyFlags.ALT_STANDSTILL
 
     # set_safety_hooks consumes the SP param before init_tests resets its raw value.
-    self.safety.set_current_safety_param_sp(HyundaiSafetyFlagsSP.DEFAULT)
+    self.safety.set_current_safety_param_sp(sp_flags)
     self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, safety_param)
     self.safety.init_tests()
     # TCS13 (0x394) carries both brake and standstill; track both so the two helpers emit a
@@ -657,19 +657,30 @@ class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
     values = {"DriverOverride": 0, "StandStill": 1, "AliveCounterTCS": 0}
     return self.packer.make_can_msg_safety("TCS13", 0, values, fix_checksum=checksum)
 
-  def _prime_non_long_rx_config(self, omitted_address=None):
+  def _prime_alt_rx_config(self, longitudinal, omitted_address=None):
     messages = {
       0x371: self._user_gas_msg(0),
       0x386: self._whl_spd_bad_integrity_msg(),
       0x394: self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": 1}, fix_checksum=checksum),
       0x251: self._torque_driver_msg(0),
       0x4F1: self.packer.make_can_msg_safety("CLU11", 0, {"CF_Clu_AliveCnt1": 1}),
-      0x420: self.packer.make_can_msg_safety("SCC11", 0, {"MainMode_ACC": 0}),
-      0x421: self.packer.make_can_msg_safety("SCC12", 0, {"ACCMode": 0, "CR_VSM_Alive": 1}, fix_checksum=checksum),
     }
+    if not longitudinal:
+      messages |= {
+        0x420: self.packer.make_can_msg_safety("SCC11", 0, {"MainMode_ACC": 0}),
+        0x421: self.packer.make_can_msg_safety("SCC12", 0, {"ACCMode": 0, "CR_VSM_Alive": 1}, fix_checksum=checksum),
+      }
     for address, message in messages.items():
       if address != omitted_address:
         self.assertTrue(self._rx(message), f"RX rejected required address {address:#x}")
+
+  def _bad_checksum_tcs13_msg(self, counter=2):
+    def corrupt_checksum(msg):
+      addr, dat, bus = checksum(msg)
+      dat = bytearray(dat)
+      dat[6] ^= 0x0F
+      return addr, bytes(dat), bus
+    return self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": counter}, fix_checksum=corrupt_checksum)
 
   def test_whl_spd_bad_integrity_allowed(self):
     # 0x386 lacks valid counter/checksum on this car; RX must NOT drop controls under ALT_STANDSTILL
@@ -705,7 +716,39 @@ class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
     for omitted_address in (None, 0x420, 0x421):
       with self.subTest(omitted_address=omitted_address):
         self._configure_alt_standstill(longitudinal=False)
-        self._prime_non_long_rx_config(omitted_address)
+        self._prime_alt_rx_config(longitudinal=False, omitted_address=omitted_address)
+        self.assertEqual(self.safety.safety_config_valid(), omitted_address is None)
+
+  def test_alt_standstill_rx_validity_across_flag_combinations(self):
+    flag_combinations = (
+      (0, HyundaiSafetyFlagsSP.DEFAULT),
+      (HyundaiSafetyFlags.FCEV_GAS, HyundaiSafetyFlagsSP.DEFAULT),
+      (0, HyundaiSafetyFlagsSP.HAS_LDA_BUTTON),
+      (0, HyundaiSafetyFlagsSP.ESCC),
+      (0, HyundaiSafetyFlagsSP.NON_SCC),
+      (HyundaiSafetyFlags.FCEV_GAS,
+       HyundaiSafetyFlagsSP.HAS_LDA_BUTTON | HyundaiSafetyFlagsSP.ESCC | HyundaiSafetyFlagsSP.NON_SCC),
+    )
+    for longitudinal in (True, False):
+      for main_flags, sp_flags in flag_combinations:
+        with self.subTest(longitudinal=longitudinal, main_flags=main_flags, sp_flags=sp_flags):
+          self._configure_alt_standstill(longitudinal=longitudinal, main_flags=main_flags, sp_flags=sp_flags)
+          self._prime_alt_rx_config(longitudinal=longitudinal)
+          self.assertTrue(self.safety.safety_config_valid())
+          self.assertFalse(self._rx(self._bad_checksum_tcs13_msg()))
+
+  def test_long_alt_required_rx_checks_are_independent(self):
+    for omitted_address in (None, 0x371, 0x386, 0x394, 0x251, 0x4F1):
+      with self.subTest(omitted_address=omitted_address):
+        self._configure_alt_standstill(longitudinal=True)
+        self._prime_alt_rx_config(longitudinal=True, omitted_address=omitted_address)
+        self.assertEqual(self.safety.safety_config_valid(), omitted_address is None)
+
+  def test_non_long_alt_precedes_non_scc_and_requires_scc(self):
+    for omitted_address in (None, 0x420, 0x421):
+      with self.subTest(omitted_address=omitted_address):
+        self._configure_alt_standstill(longitudinal=False, sp_flags=HyundaiSafetyFlagsSP.NON_SCC)
+        self._prime_alt_rx_config(longitudinal=False, omitted_address=omitted_address)
         self.assertEqual(self.safety.safety_config_valid(), omitted_address is None)
 
   def test_non_long_whl_spd_bad_integrity_allowed(self):

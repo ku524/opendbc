@@ -1,6 +1,7 @@
 from hypothesis import settings, given, strategies as st
 
 import unittest
+from unittest.mock import Mock, patch
 
 from opendbc.car import gen_empty_fingerprint
 from opendbc.car.docs_definitions import SupportType
@@ -15,6 +16,7 @@ from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR
                                          HyundaiFlags, get_platform_codes, HyundaiSafetyFlags, \
                                          NON_SCC_CAR
 from opendbc.car.hyundai.fingerprints import FW_VERSIONS
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 Ecu = CarParams.Ecu
 
@@ -46,11 +48,40 @@ CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
+  @staticmethod
+  def _sonata_lf_hybrid_long_params():
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[0][0x544] = 8
+    fingerprint[2][0x53E] = 8
+    car_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+    car_params_sp = CarInterface.get_params_sp(car_params, CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+    return car_params, car_params_sp
+
   def test_personal_fork_support_metadata(self):
     car_docs = CAR.HYUNDAI_SONATA_LF_HYBRID.config.car_docs
     assert len(car_docs) == 1
     assert car_docs[0].support_type == SupportType.COMMUNITY
     assert car_docs[0].support_link == "#community"
+
+  def test_sonata_lf_hybrid_long_deinit_reenables_radar(self):
+    car_params, car_params_sp = self._sonata_lf_hybrid_long_params()
+    self.assertEqual(car_params_sp.flags, HyundaiFlagsSP.SPEED_LIMIT_AVAILABLE | HyundaiFlagsSP.HAS_LKAS12)
+    can_recv = Mock()
+    can_send = Mock()
+
+    with patch("opendbc.car.hyundai.interface.disable_ecu") as disable_ecu_mock:
+      CarInterface.deinit(car_params, car_params_sp, can_recv, can_send)
+
+    disable_ecu_mock.assert_called_once_with(can_recv, can_send, bus=0, addr=0x7D0, com_cont_req=b"\x28\x80\x01")
+
+  def test_sonata_lf_hybrid_deinit_preserves_enhanced_scc(self):
+    car_params, car_params_sp = self._sonata_lf_hybrid_long_params()
+    car_params_sp.flags |= HyundaiFlagsSP.ENHANCED_SCC
+
+    with patch("opendbc.car.hyundai.interface.disable_ecu") as disable_ecu_mock:
+      CarInterface.deinit(car_params, car_params_sp, Mock(), Mock())
+
+    disable_ecu_mock.assert_not_called()
 
   def test_feature_detection(self):
     # LKA steering

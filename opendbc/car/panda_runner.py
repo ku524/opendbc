@@ -1,14 +1,21 @@
+from __future__ import annotations
+
 import time
 from contextlib import AbstractContextManager
+from typing import TYPE_CHECKING
 
-from panda import Panda
 from opendbc.car.car_helpers import get_car
 from opendbc.car.can_definitions import CanData
 from opendbc.car.structs import CarParams, CarControl
 
+if TYPE_CHECKING:
+  from panda import Panda
+
 
 class PandaRunner(AbstractContextManager):
   def __enter__(self):
+    from panda import Panda
+
     self.p = Panda()
     self.p.reset()
 
@@ -19,14 +26,18 @@ class PandaRunner(AbstractContextManager):
 
     safety_model = self.CI.CP.safetyConfigs[0].safetyModel
     self.p.set_safety_mode(CarParams.SafetyModel.elm327, 1)
-    self.CI.init(self.CI.CP, self._can_recv, self.p.can_send_many)
+    self.CI.init(self.CI.CP, self.CI.CP_SP, self._can_recv, self.p.can_send_many)
     self.p.set_safety_mode(safety_model, self.CI.CP.safetyConfigs[0].safetyParam)
 
     return self
 
   def __exit__(self, exc_type, exc_value, traceback):
-    self.p.set_safety_mode(CarParams.SafetyModel.noOutput)
-    self.p.reset()  # avoid siren
+    try:
+      self.p.set_safety_mode(CarParams.SafetyModel.elm327, 1)
+      self.CI.deinit(self.CI.CP, self.CI.CP_SP, self._can_recv, self.p.can_send_many)
+    finally:
+      self.p.set_safety_mode(CarParams.SafetyModel.noOutput)
+      self.p.reset()  # avoid siren
     return super().__exit__(exc_type, exc_value, traceback)
 
   @property
