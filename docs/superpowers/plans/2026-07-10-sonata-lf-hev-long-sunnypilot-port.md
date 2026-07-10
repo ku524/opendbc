@@ -437,9 +437,10 @@ It reads the 3 local rlog segments, builds the interface with `alpha_long=True`,
 > auto-flags, validates TCS13 checksum/counter with the host-safety algorithm, and pairs only fresh
 > event-order-independent TCS13/WHL_SPD11 samples within each segment.
 >
-> **Lifecycle hardening (`89a50b75`):** base and brand `deinit` APIs carry the recorded `CP_SP`,
+> **Lifecycle hardening (`89a50b75`, `6d6bf2c5`):** base and brand `deinit` APIs carry the recorded `CP_SP`,
 > LF Hybrid radar cleanup sends `28 80 01` to `0x7D0` on bus 0 while preserving ESCC gating,
-> and `PandaRunner` switches to diagnostic safety before cleanup and always resets afterward.
+> and `PandaRunner` independently attempts diagnostic safety, deinit, no-output, and reset on
+> initialization or exit failures without masking the primary exception.
 
 - [x] **Step 2: Run it** — downloaded the canonical public route segments 0, 2, and 3 from the comma API and ran the validator unchanged.
 

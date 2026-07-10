@@ -7,9 +7,9 @@ You are performing an adversarial, safety-critical code review of the current br
 - Working tree: `/home/super/work/sunny_opendbc`
 - Branch: `sonata-lf-hev-long-sp`
 - Base/merge-base: `ffa13083ff80fc88b03a6cbb9b88e887aa090469` (`origin/master`)
-- Review HEAD: `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`
-- Primary source diff: `git diff ffa13083...HEAD -- <source paths>`
-- Commit series: `git log --oneline --reverse ffa13083..HEAD`
+- Review HEAD: `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`
+- Primary source diff: `git diff ffa13083ff80fc88b03a6cbb9b88e887aa090469...6d6bf2c51c0cc91380554765aa6e2031b08ba4c1 -- <source paths>`
+- Commit series: `git log --oneline --reverse ffa13083ff80fc88b03a6cbb9b88e887aa090469..6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`
 - The branch includes large planning/reference documents. Treat them as requirements and leads, not proof that the implementation is correct.
 
 ## Read First
@@ -23,15 +23,23 @@ You are performing an adversarial, safety-critical code review of the current br
 
 ## Changed Implementation Files
 
-- `opendbc/car/hyundai/values.py`
-- `opendbc/car/hyundai/interface.py`
+- `opendbc/car/honda/interface.py`
 - `opendbc/car/hyundai/fingerprints.py`
-- `opendbc/car/torque_data/substitute.toml`
-- `opendbc/car/tests/routes.py`
-- `opendbc/car/hyundai/tests/test_hyundai.py`
+- `opendbc/car/hyundai/interface.py`
 - `opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py`
-- `opendbc/safety/modes/hyundai_common.h`
+- `opendbc/car/hyundai/tests/test_hyundai.py`
+- `opendbc/car/hyundai/tests/test_replay_sonata_lf_hybrid_long.py`
+- `opendbc/car/hyundai/values.py`
+- `opendbc/car/interfaces.py`
+- `opendbc/car/panda_runner.py`
+- `opendbc/car/subaru/interface.py`
+- `opendbc/car/tests/routes.py`
+- `opendbc/car/tests/test_car_interfaces.py`
+- `opendbc/car/tests/test_panda_runner.py`
+- `opendbc/car/torque_data/substitute.toml`
+- `opendbc/car/toyota/interface.py`
 - `opendbc/safety/modes/hyundai.h`
+- `opendbc/safety/modes/hyundai_common.h`
 - `opendbc/safety/tests/test_hyundai.py`
 
 ## Intended Behavior To Verify, Not Assume
@@ -44,6 +52,7 @@ You are performing an adversarial, safety-critical code review of the current br
 - No actuation implementation file should change. Existing flag-driven controller/state behavior must actually support the new platform.
 - Empty fingerprints must not accidentally enable ESCC, NON_SCC, or LDA behavior.
 - The replay script must conform to this fork's `CarParamsSP`, `update()`, and `apply()` APIs and must fail closed on missing, empty, or unrepresentative route inputs.
+- `PandaRunner` initialization and exit failures must attempt deinit, no-output, and panda reset independently without masking an initialization or context-body exception.
 
 ## Adversarial Review Checklist
 
