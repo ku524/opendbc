@@ -74,6 +74,21 @@ class TestPandaRunnerLifecycle(unittest.TestCase):
     self.assertEqual(panda.set_safety_mode.call_args_list[-2:],
                      [call(CarParams.SafetyModel.elm327, 1), call(CarParams.SafetyModel.noOutput)])
 
+  def test_enter_init_failure_runs_cleanup(self):
+    panda, car_interface, panda_module = self.enter_dependencies()
+    car_interface.init.side_effect = RuntimeError("interface init failed after partial work")
+
+    with patch.dict(sys.modules, {"panda": panda_module}), \
+         patch("opendbc.car.panda_runner.get_car", return_value=car_interface):
+      with self.assertRaisesRegex(RuntimeError, "interface init failed after partial work"):
+        PandaRunner().__enter__()
+
+    car_interface.init.assert_called_once()
+    car_interface.deinit.assert_called_once()
+    self.assertEqual(panda.reset.call_count, 2)
+    self.assertEqual(panda.set_safety_mode.call_args_list[-2:],
+                     [call(CarParams.SafetyModel.elm327, 1), call(CarParams.SafetyModel.noOutput)])
+
   def test_enter_error_is_not_masked_by_cleanup_failures(self):
     panda, car_interface, panda_module = self.enter_dependencies()
     car_interface.deinit.side_effect = RuntimeError("deinit failed")
@@ -115,6 +130,25 @@ class TestPandaRunnerLifecycle(unittest.TestCase):
     with self.assertRaisesRegex(RuntimeError, "noOutput failed"):
       self.runner.__exit__(None, None, None)
 
+    self.runner.CI.deinit.assert_called_once()
+    self.runner.p.reset.assert_called_once_with()
+
+  def test_exit_attempts_every_cleanup_step_and_reports_first_error(self):
+    self.runner.CI.deinit.side_effect = RuntimeError("deinit failed")
+    self.runner.p.reset.side_effect = RuntimeError("reset failed")
+
+    def fail_safety_modes(safety_model, safety_param=None):
+      if safety_model == CarParams.SafetyModel.elm327:
+        raise RuntimeError("diagnostic failed")
+      if safety_model == CarParams.SafetyModel.noOutput:
+        raise RuntimeError("noOutput failed")
+
+    self.runner.p.set_safety_mode.side_effect = fail_safety_modes
+    with self.assertRaisesRegex(RuntimeError, "diagnostic failed"):
+      self.runner.__exit__(None, None, None)
+
+    self.assertEqual(self.runner.p.set_safety_mode.call_args_list,
+                     [call(CarParams.SafetyModel.elm327, 1), call(CarParams.SafetyModel.noOutput)])
     self.runner.CI.deinit.assert_called_once()
     self.runner.p.reset.assert_called_once_with()
 
