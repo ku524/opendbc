@@ -3,7 +3,7 @@
 **Branch:** `sonata-lf-hev-long-sp`
 **Base commit:** `ffa13083` (sunnypilot/opendbc master)
 **Baseline implementation HEAD:** `675f988d`
-**Review-hardened implementation:** `e68ba8dff71803403454046902f4ccb1542f7956`
+**Review-hardened implementation:** `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`
 
 ## Done (committed)
 
@@ -16,16 +16,18 @@
 | Task 5 | `92116d81` | Added long/non-long ALT_STANDSTILL safety coverage |
 | Task 6 | `1cf8c8cb` | Added the sunnypilot-compatible offline replay script |
 | Review hardening | `e68ba8df` | Pinned and snapshotted canonical replay inputs, validated TCS13/timeline/cadence, and added negative controls |
+| Lifecycle cleanup | `89a50b75` | Restored CP/SP deinit API, radar re-enable cleanup, and ALT RX precedence coverage |
 
 ## Verification
 
-The following results were rerun from the immutable hardening revision `e68ba8dff71803403454046902f4ccb1542f7956`:
+The following results were rerun from the immutable hardening revision `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`:
 
-- `opendbc.safety.tests.test_hyundai`: 1,935 tests passed, 208 skipped.
-- `opendbc/safety/tests/test.sh`: 8,418 tests passed, 911 skipped; checked C files reached 100% line coverage.
+- `opendbc.safety.tests.test_hyundai`: 1,938 tests passed, 208 skipped.
+- `opendbc/safety/tests/test.sh`: 8,421 tests passed, 911 skipped; checked C files reached 100% line coverage.
 - Hyundai car tests: 14 passed, 2 skipped.
 - Route, platform config, Sonata interface, and lateral-limit focused tests: 5 passed.
-- Target Python files pass `ruff` and `ty check`; all 22 replay regression tests pass.
+- Target Python files pass `ruff`, `ty check`, and `py_compile`; all 23 replay regression tests pass.
+- All 267 car-interface tests pass; lifecycle-focused Hyundai/PandaRunner/signature tests pass.
 - Empty-fingerprint CarParams checks confirm standard Hyundai safety, LONG boundary behavior, HYBRID_GAS and ALT_STANDSTILL, with ESCC/NON_SCC off.
 - `carcontroller.py`, `hyundaican.py`, and `carstate.py` remain zero-diff.
 
@@ -37,6 +39,8 @@ The following results were rerun from the immutable hardening revision `e68ba8df
 - TCS13 checksum/counter integrity is checked with the same fields and tolerance as host safety before polarity analysis.
 - StandStill polarity processes each unique timestamp once, resets parser/wheel state per segment, accepts only nonnegative wheel/TCS13 skew within 100 ms, and enforces minimum stopped/moving cohorts.
 - Safety negative controls separately cover ALT-off 0x386 checksum and fixed-counter failures in long/non-long, fixed-counter TCS13, and independent SCC11/SCC12 requirements. SP param is reset before every safety hook setup.
+- LONG/non-long ALT RX configurations are valid across FCEV/LDA/ESCC/NON_SCC flag combinations; every LONG required RX group and non-long SCC11/SCC12 requirement is independently enforced while TCS13 remains strict.
+- Base, Hyundai, Honda, Toyota, and Subaru deinit APIs preserve `CP_SP`. `PandaRunner` enters diagnostic safety mode, re-enables disabled ECUs, then always selects no-output and resets the panda.
 - The personal-fork car docs render as `Community/#community` rather than `Upstream`.
 - The unsupported MANDO radar-track claim was withdrawn; the canonical segments independently contain zero bus-1 0x500-0x535 frames.
 - Canonical route replay passed: 18,121 CAN events, 9,065 integrity-valid TCS13 frames, stopped `3044/3098` (98.26%), moving `5031/5031` (100%).

@@ -7,16 +7,19 @@
 - Task 5 safety tests are in `92116d81`; adversarial follow-up adds ALT-off, TCS13 counter, SCC11/SCC12, and SP-reset coverage.
 - Task 6 replay script is in `1cf8c8cb`; adversarial follow-up pins canonical SHA-256, decodes authenticated snapshots, validates timeline/address/TCS13 integrity, and adds 22 replay regression tests.
 - Review hardening is committed as `e68ba8dff71803403454046902f4ccb1542f7956`.
+- Lifecycle cleanup and additional negative coverage are committed as `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`.
 
 ## Verification
 
-All results below were rerun from `e68ba8dff71803403454046902f4ccb1542f7956`:
+All results below were rerun from `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`:
 
-- Hyundai safety: 1,935 passed, 208 skipped.
-- Full safety gate: 8,418 passed, 911 skipped; 100% checked C line coverage.
+- Hyundai safety: 1,938 passed, 208 skipped.
+- Full safety gate: 8,421 passed, 911 skipped; 100% checked C line coverage.
 - Hyundai car tests: 14 passed, 2 skipped.
 - Focused route/config/interface/lateral tests: 5 passed.
 - Replay fail-closed tests, lint, compile, and type check passed.
+- Replay regression tests: 23 passed; car-interface tests: 267 passed.
+- LF Hybrid deinit emits the radar enable request with the recorded SP flags; ESCC skips radar cleanup. PandaRunner cleanup is performed in diagnostic safety mode before no-output/reset.
 - Canonical 0/2/3 replay passed: 18,121 CAN events; 9,065 valid TCS13 frames; stopped 98.26%, moving 100%.
 - Community support metadata renders correctly; the unsupported MANDO radar claim was withdrawn.
 - Actuation files are zero-diff.
