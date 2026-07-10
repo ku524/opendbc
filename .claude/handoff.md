@@ -9,17 +9,18 @@
 - Review hardening is committed as `e68ba8dff71803403454046902f4ccb1542f7956`.
 - Lifecycle cleanup and additional negative coverage are committed as `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`.
 - Exception-safe PandaRunner cleanup is committed as `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`.
+- Partial-init and diagnostic-cleanup fault coverage is committed as `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`.
 
 ## Verification
 
-All results below were rerun from `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`:
+All results below were rerun from `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`:
 
 - Hyundai safety: 1,938 passed, 208 skipped.
 - Full safety gate: 8,421 passed, 911 skipped; 100% checked C line coverage.
 - Hyundai car tests: 14 passed, 2 skipped.
 - Focused route/config/interface/lateral tests: 5 passed.
 - Replay fail-closed tests, lint, compile, and type check passed.
-- Replay regression tests: 23 passed; car-interface tests: 267 passed; PandaRunner lifecycle tests: 7 passed.
+- Replay regression tests: 23 passed; car-interface tests: 267 passed; PandaRunner lifecycle tests: 9 passed.
 - LF Hybrid deinit emits the radar enable request with the recorded SP flags; ESCC skips radar cleanup. PandaRunner independently attempts diagnostic mode, deinit, no-output, and reset on failures without masking the primary exception.
 - Canonical 0/2/3 replay passed: 18,121 CAN events; 9,065 valid TCS13 frames; stopped 98.26%, moving 100%.
 - Community support metadata renders correctly; the unsupported MANDO radar claim was withdrawn.

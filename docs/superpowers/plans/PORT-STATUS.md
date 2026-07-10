@@ -3,7 +3,7 @@
 **Branch:** `sonata-lf-hev-long-sp`
 **Base commit:** `ffa13083` (sunnypilot/opendbc master)
 **Baseline implementation HEAD:** `675f988d`
-**Review-hardened implementation:** `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`
+**Review-hardened implementation:** `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
 
 ## Done (committed)
 
@@ -18,17 +18,18 @@
 | Review hardening | `e68ba8df` | Pinned and snapshotted canonical replay inputs, validated TCS13/timeline/cadence, and added negative controls |
 | Lifecycle cleanup | `89a50b75` | Restored CP/SP deinit API, radar re-enable cleanup, and ALT RX precedence coverage |
 | Exception-safe cleanup | `6d6bf2c5` | Made PandaRunner initialization and exit cleanup best-effort while preserving primary exceptions |
+| Lifecycle fault coverage | `15ad0815` | Covered partial interface initialization and failure of every cleanup stage |
 
 ## Verification
 
-The following results were rerun from the immutable hardening revision `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`:
+The following results were rerun from the immutable hardening revision `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`:
 
 - `opendbc.safety.tests.test_hyundai`: 1,938 tests passed, 208 skipped.
 - `opendbc/safety/tests/test.sh`: 8,421 tests passed, 911 skipped; checked C files reached 100% line coverage.
 - Hyundai car tests: 14 passed, 2 skipped.
 - Route, platform config, Sonata interface, and lateral-limit focused tests: 5 passed.
 - Target Python files pass `ruff`, `ty check`, and `py_compile`; all 23 replay regression tests pass.
-- All 267 car-interface tests pass; all 7 PandaRunner lifecycle tests and focused Hyundai/signature tests pass.
+- All 267 car-interface tests pass; all 9 PandaRunner lifecycle tests and focused Hyundai/signature tests pass.
 - Empty-fingerprint CarParams checks confirm standard Hyundai safety, LONG boundary behavior, HYBRID_GAS and ALT_STANDSTILL, with ESCC/NON_SCC off.
 - `carcontroller.py`, `hyundaican.py`, and `carstate.py` remain zero-diff.
 

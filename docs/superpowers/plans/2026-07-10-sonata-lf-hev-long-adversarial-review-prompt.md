@@ -7,9 +7,9 @@ You are performing an adversarial, safety-critical code review of the current br
 - Working tree: `/home/super/work/sunny_opendbc`
 - Branch: `sonata-lf-hev-long-sp`
 - Base/merge-base: `ffa13083ff80fc88b03a6cbb9b88e887aa090469` (`origin/master`)
-- Review HEAD: `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`
-- Primary source diff: `git diff ffa13083ff80fc88b03a6cbb9b88e887aa090469...6d6bf2c51c0cc91380554765aa6e2031b08ba4c1 -- <source paths>`
-- Commit series: `git log --oneline --reverse ffa13083ff80fc88b03a6cbb9b88e887aa090469..6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`
+- Review HEAD: `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
+- Primary source diff: `git diff ffa13083ff80fc88b03a6cbb9b88e887aa090469...15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa -- <source paths>`
+- Commit series: `git log --oneline --reverse ffa13083ff80fc88b03a6cbb9b88e887aa090469..15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
 - The branch includes large planning/reference documents. Treat them as requirements and leads, not proof that the implementation is correct.
 
 ## Read First
