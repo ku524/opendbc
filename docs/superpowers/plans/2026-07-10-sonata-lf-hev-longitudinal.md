@@ -483,8 +483,8 @@ In `opendbc/car/hyundai/values.py`, immediately after the `HYUNDAI_SONATA_LF` en
 ```
 
 > **MANDO_RADAR:** the prior claim that segments 0/2/3 contain bus-1 0x500–0x535 radar point frames
-> is withdrawn. Review reports zero such frames; the owner rlogs are unavailable on this machine
-> for an independent recount. Do not set `HyundaiFlags.MANDO_RADAR`; the platform remains on vision
+> is withdrawn. An independent recount of the canonical files found zero such frames in every
+> segment. Do not set `HyundaiFlags.MANDO_RADAR`; the platform remains on vision
 > lead data.
 
 - [ ] **Step 2: Add to the `STEER_MAX = 255` bucket (values.py)**

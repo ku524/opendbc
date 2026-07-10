@@ -636,18 +636,22 @@ class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
     self._standstill = speed <= self.STANDSTILL_THRESHOLD
     return self._tcs13_msg()
 
-  def _whl_spd_bad_integrity_msg(self):
-    # Mimic this car's WHL_SPD11 (0x386): frozen counter + invalid checksum (flip checksum bits).
+  def _whl_spd_msg(self, counter, corrupt_checksum=False):
     values = {"WHL_SPD_%s" % s: 20.0 for s in ["FL", "FR", "RL", "RR"]}
-    values["WHL_SPD_AliveCounter_LSB"] = 0
-    values["WHL_SPD_AliveCounter_MSB"] = 0
+    values["WHL_SPD_AliveCounter_LSB"] = counter & 0x3
+    values["WHL_SPD_AliveCounter_MSB"] = counter >> 2
 
-    def corrupt(msg):
+    def apply_checksum(msg):
       addr, dat, bus = checksum(msg)
-      dat = bytearray(dat)
-      dat[5] ^= 0xC0  # WHL_SPD11 checksum bits live in byte 5 high bits -> make invalid
+      if corrupt_checksum:
+        dat = bytearray(dat)
+        dat[5] ^= 0xC0  # WHL_SPD11 checksum bits live in byte 5 high bits.
       return addr, bytes(dat), bus
-    return self.packer.make_can_msg_safety("WHL_SPD11", 0, values, fix_checksum=corrupt)
+    return self.packer.make_can_msg_safety("WHL_SPD11", 0, values, fix_checksum=apply_checksum)
+
+  def _whl_spd_bad_integrity_msg(self):
+    # Mimic this car's WHL_SPD11 (0x386): frozen counter and invalid checksum.
+    return self._whl_spd_msg(0, corrupt_checksum=True)
 
   def _fixed_counter_tcs13_msg(self):
     values = {"DriverOverride": 0, "StandStill": 1, "AliveCounterTCS": 0}
@@ -674,11 +678,20 @@ class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
       self.assertTrue(self._rx(self._whl_spd_bad_integrity_msg()))
       self.assertTrue(self.safety.get_controls_allowed())
 
-  def test_whl_spd_bad_integrity_rejected_without_alt(self):
+  def test_whl_spd_bad_checksum_rejected_without_alt(self):
     for longitudinal in (True, False):
       with self.subTest(longitudinal=longitudinal):
         self._configure_alt_standstill(longitudinal=longitudinal, enabled=False)
-        self.assertFalse(self._rx(self._whl_spd_bad_integrity_msg()))
+        self.assertFalse(self._rx(self._whl_spd_msg(1, corrupt_checksum=True)))
+
+  def test_whl_spd_fixed_counter_rejected_without_alt(self):
+    expected_results = [True] * (common.MAX_WRONG_COUNTERS - 1) + [False]
+    for longitudinal in (True, False):
+      with self.subTest(longitudinal=longitudinal):
+        self._configure_alt_standstill(longitudinal=longitudinal, enabled=False)
+        self.assertTrue(self._rx(self._whl_spd_msg(1)))
+        results = [self._rx(self._whl_spd_msg(1)) for _ in range(common.MAX_WRONG_COUNTERS)]
+        self.assertEqual(results, expected_results)
 
   def test_tcs13_fixed_counter_rejected(self):
     expected_results = [True] * (common.MAX_WRONG_COUNTERS - 1) + [False]

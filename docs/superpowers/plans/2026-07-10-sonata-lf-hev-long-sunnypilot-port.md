@@ -432,16 +432,20 @@ It reads the 3 local rlog segments, builds the interface with `alpha_long=True`,
 
 > **Post-review hardening:** the implemented sunnypilot replay intentionally goes beyond the
 > reference script. It uses explicit validation errors rather than `assert`, validates exact
-> segment paths and capture structure, builds the fingerprint from recorded CAN, checks required
-> address rate/gaps and forbidden auto-flags, and pairs only fresh TCS13/WHL_SPD11 samples.
+> route filenames and segment set plus canonical SHA-256, decodes the authenticated byte snapshots, validates raw and cross-segment timestamp order, builds the
+> fingerprint from recorded CAN, checks unique-timestamp address rates plus edge gaps and forbidden
+> auto-flags, validates TCS13 checksum/counter with the host-safety algorithm, and pairs only fresh
+> event-order-independent TCS13/WHL_SPD11 samples within each segment.
 
-- [ ] **Step 2: Run it** — deferred on this machine: the owner's three local rlog segments are unavailable.
+- [x] **Step 2: Run it** — downloaded the canonical public route segments 0, 2, and 3 from the comma API and ran the validator unchanged.
 
 ```bash
 cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
 uv run --with zstandard python opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
 ```
-Expected: ends `ALL OFFLINE CHECKS PASSED`. If `get_params`/`interfaces` import differs in sunnypilot, adjust the two import lines to match sunnypilot's `car_helpers` API (behavior identical). Requires the owner's 3 local route segments (see the companion plan's Prerequisites) present on this machine.
+Observed: `18,121` CAN events replayed, all `9,065` TCS13 frames passed checksum/counter validation,
+fresh StandStill pairs were stopped `3044/3098` (`98.26%`) and moving `5031/5031` (`100%`), and the
+run ended `ALL OFFLINE CHECKS PASSED`.
 
 - [x] **Step 3: Commit** — `git add opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py && git commit -m "hyundai: offline replay for Sonata LF Hybrid long (sunnypilot port)"`
 
