@@ -462,19 +462,19 @@ run ended `ALL OFFLINE CHECKS PASSED`.
 
 **Why it is not source-edit-only:** the Python changes load live, but the panda safety C changes are compiled into the panda firmware and must be recompiled + reflashed. sunnypilot's panda is already an ALLOW_DEBUG build (no release cert), and its firmware is compiled FROM `opendbc/safety` (repo-root symlink `opendbc` → `opendbc_repo/opendbc`), so these edits do land — after a rebuild.
 
-- [ ] **Step 1: Get the branch onto the device's `opendbc_repo`**
+- [x] **Step 1: Get the branch onto the device's `opendbc_repo`**
 
 Push `sonata-lf-hev-long-sp` to your sunnypilot-opendbc fork remote, SSH to the device (`ssh comma@<device-ip>`), and in `openpilot/opendbc_repo` fetch + checkout that branch. (Or rsync the working tree into `opendbc_repo`.) Confirm the symlink resolves: `readlink openpilot/opendbc` → `opendbc_repo/opendbc`.
 
-- [ ] **Step 2: Rebuild on device (recompiles panda firmware)**
+- [x] **Step 2: Rebuild on device (recompiles panda firmware)**
 
 In the openpilot dir on the device, run the build (`scons`, or let `system/manager/build.py` run it on boot). This regenerates `panda/board/obj/panda_h7.bin.signed`.
 
-- [ ] **Step 3: Reboot → auto-reflash → VERIFY**
+- [x] **Step 3: Reboot → auto-reflash → VERIFY**
 
 Reboot. `pandad` detects the firmware signature mismatch and reflashes. **Verify the panda actually took new firmware** (pandad logs / panda firmware git hash). If unchanged, the safety still rejects 0x386 → the car will not engage.
 
-- [ ] **Step 4: Enable Alpha Longitudinal**
+- [x] **Step 4: Enable Alpha Longitudinal**
 
 In sunnypilot settings, enable the alpha/openpilot longitudinal toggle for this car (`alphaLongitudinalAvailable` is now True).
 
@@ -486,6 +486,14 @@ Follow `docs/sonata-lf-hev-long-oncar.md` from the reference repo (also bundled 
 3. Standstill hold + resume (TCS13 StandStill path). 4. Driver override (brake→disengage, gas→override). 5. Ride quality.
 
 > Factory AEB is OFF while engaged (radar disabled). Empty road, foot ready to brake, instant-disengage posture.
+
+> **2026-07-11 deployment result:** source revision `f62fb8fe` was file-deployed onto sunnypilot
+> `staging@3781e253`, panda firmware SHA-256 `095e3486bf09b42a6d26ce40ab6be55fd0115dc8aefd7181a0187bbfcfc585f1`
+> was auto-reflashed, and the radar-disable gate passed with zero stock SCC frames and no dual SCC
+> during the road test. Standstill/resume, brake disengagement, and gas override were exercised.
+> Objective route checks passed; subjective ride-quality review remains, so Step 5 stays open.
+> Required evidence and rollback artifacts are indexed in
+> `2026-07-11-sonata-lf-hev-long-device-handoff.md`.
 
 ---
 

@@ -2,34 +2,41 @@
 
 ## Done
 
-- Tasks 1-6 are implemented and committed on `sonata-lf-hev-long-sp`.
-- Task 4 platform registration and MAIN safety-param wiring are in `6aefd30d`.
-- Task 5 safety tests are in `92116d81`; adversarial follow-up adds ALT-off, TCS13 counter, SCC11/SCC12, and SP-reset coverage.
-- Task 6 replay script is in `1cf8c8cb`; adversarial follow-up pins canonical SHA-256, decodes authenticated snapshots, validates timeline/address/TCS13 integrity, and adds 23 replay regression tests.
-- Review hardening is committed as `e68ba8dff71803403454046902f4ccb1542f7956`.
-- Lifecycle cleanup and additional negative coverage are committed as `89a50b75b2a7bae49f905abfdf9cbf8e69efb3fe`.
-- Exception-safe PandaRunner cleanup is committed as `6d6bf2c51c0cc91380554765aa6e2031b08ba4c1`.
-- Partial-init and diagnostic-cleanup fault coverage is committed as `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`.
+- Tasks 1 through 6 remain implemented on personal branch `sonata-lf-hev-long-sp` at `e5a55c9e`.
+- Device-compatible opendbc work is preserved on `sonata-lf-hev-long-sp-device-b971` at `f62fb8fe`, with a complete verified Git bundle.
+- Task 7 Steps 1 through 4 are complete: source deployment, device build, panda auto-reflash verification, and Alpha Longitudinal enablement.
+- A long urban-road drive exercised engagement, deliberate disengagement, standstill/resume, brake disengagement, and gas override.
+- Required route evidence, active source patch, Params, exact firmware, pre-custom rollback, and experimental radard originals were copied to `/Users/mark.yeon/Documents/work/oss/sunny_opendbc-device-backups`.
+- Complete device modification, rollback, artifact, and PR-integration record: `docs/superpowers/plans/2026-07-11-sonata-lf-hev-long-device-handoff.md`.
+
+## Current State
+
+- Device sunnypilot: `staging@3781e253`, intentionally dirty from file deployment.
+- Active opendbc files exactly match local `f62fb8fe`.
+- Active panda firmware SHA-256: `095e3486bf09b42a6d26ce40ab6be55fd0115dc8aefd7181a0187bbfcfc585f1`.
+- Active `radard.py` is the poll-all candidate, SHA-256 `8dc45dfcea53fdac181d875cd3abc72913b8cbd8d745de7ea3a0aebca572a865`.
+- Handoff Params: Alpha Long on, Always Offroad on, device offroad, Experimental Mode off.
+- No more direct device work is required for route analysis.
 
 ## Verification
 
-All results below were rerun from `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`:
+- Route `000000e4--5ae02c8c77`, segments 0, 9, and 17 through 45, has qlog+rlog preserved in a 62-entry tar.
+- Local and device route tar SHA-256 matched: `31e317d1dc0965f1d686afc805b690ae74896b150a9a1dd5c082c58a7d164c14`.
+- Git bundle verification reported complete history.
+- Road-test raw CAN: zero stock SCC, openpilot SCC11/SCC12 at about 50 Hz, tester-present at about 1 Hz, no dual SCC.
+- Panda RX invalid/fault, CAN invalid/timeout, permanent steer fault, stock AEB, and stock FCW counts were zero.
+- Road-test service validity was 100% after diagnostic subscribers were stopped.
 
-- Hyundai safety: 1,938 passed, 208 skipped.
-- Full safety gate: 8,421 passed, 911 skipped; 100% checked C line coverage.
-- Hyundai car tests: 14 passed, 2 skipped.
-- Focused route/config/interface/lateral tests: 5 passed.
-- Replay fail-closed tests, lint, compile, and type check passed.
-- Replay regression tests: 23 passed; car-interface tests: 267 passed; PandaRunner lifecycle tests: 9 passed.
-- LF Hybrid deinit emits the radar enable request with the recorded SP flags; ESCC skips radar cleanup. PandaRunner independently attempts diagnostic mode, deinit, no-output, and reset on failures without masking the primary exception.
-- Canonical 0/2/3 replay passed: 18,121 CAN events; 9,065 valid TCS13 frames; stopped 98.26%, moving 100%.
-- Community support metadata renders correctly; the unsupported MANDO radar claim was withdrawn.
-- Actuation files are zero-diff.
+## Decisions and Caveats
 
-## Deferred
+- `radard.py` is not part of opendbc and its necessity is unproven. Preserve it, but do not merge it before a clean-boot A/B with no diagnostic message subscribers.
+- The intermittent communication issue correlated with diagnostic SubMaster reader-slot exhaustion and stopped when those subscribers stopped. Original radard had already passed a clean 225-second session.
+- Do not commit panda binaries, Params, logs, or reverted diagnostic patches to the personal PR.
+- Do not comma-reboot while vehicle ignition stays on after radar disable. Use a full vehicle OFF/ON cycle to reset the radar ECU.
 
-- Task 7 is manual device/on-car work and was intentionally not attempted.
+## Remaining
 
-## Next Steps
-
-1. Follow Task 7 exactly, including panda firmware verification and the 0x7D0 radar-disable abort gate.
+1. Record subjective impressions: unintended acceleration/braking, launch strength, brake/gas override feel, warnings, and comfort.
+2. Analyze copied route evidence against those observations.
+3. Integrate the eight deployed opendbc commits through `f62fb8fe` into the updated personal branch.
+4. Rerun focused safety, Hyundai interface, lifecycle, and replay tests before updating the personal PR.

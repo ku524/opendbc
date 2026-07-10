@@ -4,6 +4,7 @@
 **Base commit:** `ffa13083` (sunnypilot/opendbc master)
 **Baseline implementation HEAD:** `675f988d`
 **Review-hardened implementation:** `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
+**Device-tested port:** `f62fb8fe18d24c06c08755cab966d86b8b94e37d` on base `b9712d20`
 
 ## Done (committed)
 
@@ -49,13 +50,25 @@ The following results were rerun from the immutable hardening revision `15ad0815
 
 This checkout has no standalone `SConstruct`, so the stale `scons -j8 opendbc/safety` command is not an available entrypoint. Safety tests compile `libsafety.so` directly with `cc`; both targeted and full coverage gates passed through that repository-native path.
 
-## Deferred Gates
+## Device and On-Car Validation
 
-- Task 7 device deployment, panda rebuild/reflash, radar-disable confirmation, and on-car validation remain manual and safety-critical.
+- Task 7 Steps 1 through 4 are complete. Revision `f62fb8fe` was file-deployed onto sunnypilot `staging@3781e253`.
+- Panda firmware was rebuilt and auto-reflashed. Active signed-binary SHA-256 is `095e3486bf09b42a6d26ce40ab6be55fd0115dc8aefd7181a0187bbfcfc585f1`.
+- Alpha Longitudinal was enabled and a 25-minute raw-CAN road-test range was captured.
+- Radar-disable gate passed: zero stock SCC source-0 frames, openpilot SCC11/SCC12 at about 50 Hz, tester-present at about 1 Hz, and no dual SCC.
+- Panda RX invalid/fault counts, CAN invalid/timeouts, permanent steering faults, stock AEB, and stock FCW were zero.
+- Standstill/resume, brake disengagement, and gas override were exercised. Intermediate disengagements were driver-initiated.
+- All required route logs and recovery artifacts were copied to the laptop and verified by SHA-256. See `2026-07-11-sonata-lf-hev-long-device-handoff.md`.
+
+## Remaining Gate
+
+- Task 7 Step 5 remains open only for the driver's subjective review: unintended acceleration/braking, launch strength, override feel, warnings, and comfort.
+- The active main-repository `radard.py` experiment is preserved but not proven necessary. It requires a clean-boot A/B without external message subscribers and must not be included in the opendbc PR.
 
 ## Resume
 
-1. Preserve the passing canonical replay result as the offline prerequisite.
-2. Perform Task 7 from `2026-07-10-sonata-lf-hev-long-sunnypilot-port.md` with the human driver present.
+1. Analyze the copied route and correlate the driver's subjective observations.
+2. Integrate the deployed `f62fb8fe` opendbc history into the personal branch, then rerun focused safety, interface, lifecycle, and replay gates.
+3. Keep firmware, Params, route evidence, and unproven main-repository diagnostics outside the personal opendbc PR.
 
 This is a personal fork change. Do not open an upstream PR against sunnypilot or commaai.
