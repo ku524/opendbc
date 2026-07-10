@@ -30,7 +30,7 @@ Empirically confirmed by replaying the owner's route through `opendbc.car.logrea
 | 0x421 SCC12 has integrity | counter + 100% checksum; openpilot's computed SCC12 checksum matches → powertrain will accept openpilot accel |
 | All non-legacy RX slots satisfiable | slot (0x260 OR 0x371): 0x371 present (hybrid gas); 0x251, 0x4F1, 0x394, 0x421 all present on bus 0. 0x260 absent (fine, OR'd). |
 | StandStill polarity | ==1 stopped 98.2% (v<0.3), ==0 moving 100% (v>5) → `vehicle_moving = !bit47` |
-| Radar outputs tracks | 0x500–0x535 present → MANDO_RADAR technically viable (optional; see Task 4 note) |
+| Radar point frames | Prior presence claim withdrawn; review reports zero bus-1 0x500–0x535 frames in segments 0/2/3, pending independent recount → keep MANDO_RADAR disabled |
 | Hybrid gas live | E_EMS11 (0x371) `CR_Vcu_AccPedDep_Pos` has 95 distinct values, 4773 nonzero frames → driver override works |
 | 0x38d absent | → `USE_FCA` stays off → AEB-disable goes via SCC12 path (auto-handled) |
 | steerRatio | kinematic estimate ~15.6 (low speed) rising to ~18 (understeer at higher speed); default `13.27 * 1.15 = 15.26`, owner may refine from `liveParameters.steerRatio` on a highway route |
@@ -475,13 +475,17 @@ In `opendbc/car/hyundai/values.py`, immediately after the `HYUNDAI_SONATA_LF` en
   # steerRatio 13.27*1.15 mirrors the ICE LF and matches low-speed route estimate; refine from
   # liveParameters.steerRatio on a highway route. mass ~1595 kg (LF Hybrid curb), owner-refinable.
   HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
-    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
+    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]),
+                    support_type=SupportType.COMMUNITY, support_link="#community")],
     CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
     flags=HyundaiFlags.HYBRID,
   )
 ```
 
-> **MANDO_RADAR note (optional, do NOT add by default):** the radar outputs tracks (0x500–0x535 present on the route), so `HyundaiFlags.MANDO_RADAR` is technically viable. But openpilot longitudinal disables the radar via 0x7D0, which also stops its tracks — so setting `MANDO_RADAR` yields no lead data once the radar is silenced, and the initial config uses vision lead. Only revisit this on-car if the radar is found to keep emitting tracks after the disable. Leaving it off matches the working baseline.
+> **MANDO_RADAR:** the prior claim that segments 0/2/3 contain bus-1 0x500–0x535 radar point frames
+> is withdrawn. Review reports zero such frames; the owner rlogs are unavailable on this machine
+> for an independent recount. Do not set `HyundaiFlags.MANDO_RADAR`; the platform remains on vision
+> lead data.
 
 - [ ] **Step 2: Add to the `STEER_MAX = 255` bucket (values.py)**
 
@@ -797,7 +801,7 @@ Create `docs/sonata-lf-hev-long-oncar.md`:
 
 ## Do not
 - Do not run on a release branch. Do not open an upstream PR (this relaxes a safety check for one
-  car). Do not set MANDO_RADAR unless the radar is confirmed to keep emitting tracks after disable.
+  car). Do not set MANDO_RADAR based on this route.
 ```
 
 - [ ] **Step 2: Commit**
@@ -826,4 +830,4 @@ git commit -m "docs: Sonata LF Hybrid longitudinal on-car bring-up checklist (pe
 
 **Type/name consistency:** flag is `ALT_STANDSTILL` / value `1024` on both python (`HyundaiSafetyFlags.ALT_STANDSTILL`, Task 1) and C (`HYUNDAI_PARAM_ALT_STANDSTILL`, global `hyundai_alt_standstill`, Task 3); referenced identically in Task 4 (OR-in) and the test class (Task 3) and replay (Task 5). Macro `HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)` defined in Task 2 and consumed in Task 3 with the same arg order.
 
-**Open items intentionally left to the owner (not gaps):** exact hybrid `mass`; whether to eventually set `MANDO_RADAR`; final `steerRatio` from a highway `liveParameters` capture. None block a working config.
+**Open items intentionally left to the owner (not gaps):** exact hybrid `mass`; final `steerRatio` from a highway `liveParameters` capture. Neither blocks a working config.

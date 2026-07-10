@@ -3,6 +3,7 @@ from hypothesis import settings, given, strategies as st
 import unittest
 
 from opendbc.car import gen_empty_fingerprint
+from opendbc.car.docs_definitions import SupportType
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai.interface import CarInterface
@@ -45,6 +46,12 @@ CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
+  def test_personal_fork_support_metadata(self):
+    car_docs = CAR.HYUNDAI_SONATA_LF_HYBRID.config.car_docs
+    assert len(car_docs) == 1
+    assert car_docs[0].support_type == SupportType.COMMUNITY
+    assert car_docs[0].support_link == "#community"
+
   def test_feature_detection(self):
     # LKA steering
     for lka_steering in (True, False):

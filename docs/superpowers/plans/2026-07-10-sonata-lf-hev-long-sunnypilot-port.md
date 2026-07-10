@@ -52,6 +52,7 @@ Confirmed by replaying the owner's route (`9f9b411a57b8ce21/00000001--d6d081f0e7
 - `opendbc/safety/modes/hyundai.h` — 2-param macro (16 call sites); alt_standstill arrays in BOTH long and non-long branches; vehicle_moving from TCS13.
 - `opendbc/safety/tests/test_hyundai.py` — new test class.
 - `opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py` — offline replay (copy from reference, fix import paths if needed).
+- `opendbc/car/hyundai/tests/test_replay_sonata_lf_hybrid_long.py` — fail-closed replay regression tests.
 
 ---
 
@@ -293,7 +294,8 @@ Expected: same count as before, all `ok`.
   # 0x386 integrity relaxed via HyundaiSafetyFlags.ALT_STANDSTILL set in interface.py.
   # steerRatio 13.27*1.15 mirrors the ICE LF (route-supported); mass ~1595 kg, owner-refinable.
   HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
-    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
+    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]),
+                    support_type=SupportType.COMMUNITY, support_link="#community")],
     CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
     flags=HyundaiFlags.HYBRID,
   )
@@ -428,6 +430,11 @@ git -C /Users/mark.yeon/Documents/work/oss/opendbc show \
 (If the comma repo path is unavailable, the full script is in this repo's own `2026-07-10-sonata-lf-hev-longitudinal.md` Task 5 Step 1 — copy it from there instead.)
 It reads the 3 local rlog segments, builds the interface with `alpha_long=True`, asserts CarParams (hyundai safety, long ON, LONG|HYBRID_GAS|ALT_STANDSTILL) + parses CarState + re-asserts StandStill polarity.
 
+> **Post-review hardening:** the implemented sunnypilot replay intentionally goes beyond the
+> reference script. It uses explicit validation errors rather than `assert`, validates exact
+> segment paths and capture structure, builds the fingerprint from recorded CAN, checks required
+> address rate/gaps and forbidden auto-flags, and pairs only fresh TCS13/WHL_SPD11 samples.
+
 - [ ] **Step 2: Run it** — deferred on this machine: the owner's three local rlog segments are unavailable.
 
 ```bash
@@ -475,9 +482,9 @@ Follow `docs/sonata-lf-hev-long-oncar.md` from the reference repo (also bundled 
 
 ## Self-Review
 
-- **Semantic parity with reference:** Tasks 1-6 reproduce every hunk of the committed comma-master diff (verified: values.py, interface.py, fingerprints.py, substitute.toml, routes.py, test_hyundai.py, hyundai_common.h, hyundai.h — including the alt_standstill array in BOTH the long and non-long branches, and vehicle_moving from TCS13).
+- **Core safety parity with reference:** values.py, interface.py, fingerprints.py, substitute.toml, routes.py, hyundai_common.h, and hyundai.h preserve the reference safety semantics, including alt_standstill arrays in BOTH long and non-long branches and vehicle_moving from TCS13. Replay validation and Community support metadata deliberately diverge after adversarial review.
 - **Divergences handled:** 16 call sites (Task 3 Step 2); 2-D long selection with outermost alt_standstill (Step 3); non-long SCC11+SCC12 (Step 4); `_get_params` not `_get_params_sp` (Task 4 Step 3); hand-edit STEER_MAX + no_eps (Task 4 Steps 2, 7); routes.py alias/path (Step 6).
 - **Runtime auto-flags neutralized:** 0x2AB and 0x391 verified absent → no ESCC/LDA divergence; fingerprint deliberately omits them; `HyundaiPlatformConfig` keeps NON_SCC dormant.
 - **Placeholder scan:** none — every code step is concrete; commands have expected output; the two lines that "copy from reference" give the exact `git show` to fetch verbatim text.
 - **Name/value consistency:** `ALT_STANDSTILL` / `1024` identical in values.py (Task 1), hyundai_common.h (Task 2), interface.py OR-in (Task 4), test (Task 5). Macro `HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)` defined Task 3 Step 1, all 16 sites updated Step 2.
-- **Owner-refinable, non-blocking:** hybrid `mass`; final `steerRatio` from a highway `liveParameters` capture; whether to ever set MANDO_RADAR (default off).
+- **Owner-refinable, non-blocking:** hybrid `mass`; final `steerRatio` from a highway `liveParameters` capture.
