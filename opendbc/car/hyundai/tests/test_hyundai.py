@@ -7,6 +7,7 @@ from opendbc.car import gen_empty_fingerprint
 from opendbc.car.docs_definitions import SupportType
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
+from opendbc.car.hyundai import hyundaican
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
 from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
@@ -62,6 +63,33 @@ class TestHyundaiFingerprint(unittest.TestCase):
     assert len(car_docs) == 1
     assert car_docs[0].support_type == SupportType.COMMUNITY
     assert car_docs[0].support_link == "#community"
+
+  def test_sonata_lf_hybrid_uses_modern_lkas_hud_fields(self):
+    class RecordingPacker:
+      latest_values: dict[str, int] = {}
+
+      def make_can_msg(self, _message_name, bus, values):
+        self.latest_values = dict(values)
+        return 0, b"\x00" * 8, bus
+
+    lkas11 = {
+      signal: 0 for signal in (
+        "CF_Lkas_LdwsActivemode", "CF_Lkas_LdwsSysState", "CF_Lkas_SysWarning",
+        "CF_Lkas_LdwsLHWarning", "CF_Lkas_LdwsRHWarning", "CF_Lkas_HbaLamp",
+        "CF_Lkas_FcwBasReq", "CF_Lkas_HbaSysState", "CF_Lkas_FcwOpt", "CF_Lkas_HbaOpt",
+        "CF_Lkas_FcwSysState", "CF_Lkas_FcwCollisionWarning", "CF_Lkas_FusionState",
+        "CF_Lkas_FcwOpt_USM", "CF_Lkas_LdwsOpt_USM",
+      )
+    }
+    packer = RecordingPacker()
+    car_params = Mock(carFingerprint=CAR.HYUNDAI_SONATA_LF_HYBRID, flags=0)
+
+    hyundaican.create_lkas11(packer, 0, car_params, 0, False, False, lkas11, False, 1, True,
+                             True, False, 0, 0, 2)
+
+    self.assertEqual(packer.latest_values["CF_Lkas_LdwsActivemode"], 1)
+    self.assertEqual(packer.latest_values["CF_Lkas_LdwsOpt_USM"], 2)
+    self.assertEqual(packer.latest_values["CF_Lkas_FcwOpt_USM"], 2)
 
   def test_sonata_lf_hybrid_long_deinit_reenables_radar(self):
     car_params, car_params_sp = self._sonata_lf_hybrid_long_params()
