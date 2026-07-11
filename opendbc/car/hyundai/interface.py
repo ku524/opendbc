@@ -155,6 +155,9 @@ class CarInterface(CarInterfaceBase):
     # WHL_SPD11 lacks valid integrity on this platform; TCS13 provides standstill instead.
     if candidate == CAR.HYUNDAI_SONATA_LF_HYBRID:
       ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_STANDSTILL.value
+      # Route evidence shows the generic fixed start and final-stop ramp override much gentler planner targets.
+      ret.startingState = False
+      ret.stoppingDecelRate = 0.45
 
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum

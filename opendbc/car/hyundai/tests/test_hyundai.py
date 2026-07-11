@@ -50,12 +50,12 @@ CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
 
 class TestHyundaiFingerprint(unittest.TestCase):
   @staticmethod
-  def _sonata_lf_hybrid_long_params():
+  def _sonata_lf_hybrid_long_params(alpha_long=True):
     fingerprint = gen_empty_fingerprint()
     fingerprint[0][0x544] = 8
     fingerprint[2][0x53E] = 8
-    car_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
-    car_params_sp = CarInterface.get_params_sp(car_params, CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+    car_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], alpha_long, False, False)
+    car_params_sp = CarInterface.get_params_sp(car_params, CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], alpha_long, False, False)
     return car_params, car_params_sp
 
   def test_personal_fork_support_metadata(self):
@@ -90,6 +90,16 @@ class TestHyundaiFingerprint(unittest.TestCase):
     self.assertEqual(packer.latest_values["CF_Lkas_LdwsActivemode"], 1)
     self.assertEqual(packer.latest_values["CF_Lkas_LdwsOpt_USM"], 2)
     self.assertEqual(packer.latest_values["CF_Lkas_FcwOpt_USM"], 2)
+
+  def test_sonata_lf_hybrid_uses_smooth_start_stop_params(self):
+    car_params, _ = self._sonata_lf_hybrid_long_params()
+
+    self.assertFalse(car_params.startingState)
+    self.assertAlmostEqual(car_params.stoppingDecelRate, 0.45)
+    self.assertAlmostEqual(car_params.stopAccel, -2.0)
+
+    lateral_only_params, _ = self._sonata_lf_hybrid_long_params(alpha_long=False)
+    self.assertFalse(lateral_only_params.openpilotLongitudinalControl)
 
   def test_sonata_lf_hybrid_long_deinit_reenables_radar(self):
     car_params, car_params_sp = self._sonata_lf_hybrid_long_params()
