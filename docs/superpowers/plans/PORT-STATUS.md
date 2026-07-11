@@ -5,7 +5,7 @@
 **Baseline implementation HEAD:** `675f988d`
 **Review-hardened implementation:** `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
 **Device-tested port:** `f62fb8fe18d24c06c08755cab966d86b8b94e37d` on base `b9712d20`
-**Offline follow-up candidate:** `9c3031f043a434c1470857e9e0f4c8fa3d7c61d3` on `followup/sonata-lf-hev-long`
+**Offline follow-up candidate:** `bc54535e` on `followup/sonata-lf-hev-long`
 
 ## Done (committed)
 
@@ -23,6 +23,7 @@
 | Lifecycle fault coverage | `15ad0815` | Covered partial interface initialization and failure of every cleanup stage |
 | Deployed HUD parity | `681f9aaa` | Restored LF Hybrid modern LKAS HUD-field handling with focused regression coverage |
 | Ride-quality candidate | `9c3031f0` | Removed the fixed start state and reduced LF Hybrid stopping deceleration rate to `0.45` |
+| Radar and steering candidate | `bc54535e` | Enabled verified Mando tracks and set the route-supported `steerRatio=16.4` |
 
 ## Verification
 
@@ -35,7 +36,7 @@ The following results were rerun from the immutable hardening revision `15ad0815
 - Target Python files pass `ruff`, `ty check`, and `py_compile`; all 23 replay regression tests pass.
 - All 267 car-interface tests pass; all 9 PandaRunner lifecycle tests and focused Hyundai/signature tests pass.
 - Empty-fingerprint CarParams checks confirm standard Hyundai safety, LONG boundary behavior, HYBRID_GAS and ALT_STANDSTILL, with ESCC/NON_SCC off.
-- Follow-up verification: Hyundai safety 1,938 tests/208 skipped; Hyundai car 18/2 skipped; PandaRunner 9; car interface 267; replay regression 23.
+- Follow-up verification: Hyundai safety 1,938 tests/208 skipped; Hyundai car 19/2 skipped; radar interface 4; PandaRunner 9; car interface 267; replay regression 23.
 - Follow-up target and replay files pass `ruff`, `ty`, `py_compile`, and `git diff --check`.
 - `carcontroller.py` and `carstate.py` remain zero-diff; `hyundaican.py` has only the deployed one-line LF Hybrid HUD inclusion.
 
@@ -50,7 +51,8 @@ The following results were rerun from the immutable hardening revision `15ad0815
 - LONG/non-long ALT RX configurations are valid across FCEV/LDA/ESCC/NON_SCC flag combinations; every LONG required RX group and non-long SCC11/SCC12 requirement is independently enforced while TCS13 remains strict.
 - Base, Hyundai, Honda, Toyota, and Subaru deinit APIs preserve `CP_SP`. `PandaRunner` attempts diagnostic mode, ECU re-enable, no-output, and panda reset independently on initialization and exit failures. Cleanup errors cannot mask an initialization or body exception; normal-exit cleanup still reports the first failure after reset is attempted.
 - The personal-fork car docs render as `Community/#community` rather than `Upstream`.
-- The unsupported MANDO radar-track claim was withdrawn; the canonical segments independently contain zero bus-1 0x500-0x535 frames.
+- The backed-up Alpha Long route independently confirms bus-1 `0x500-0x51f` tracks after SCC normal-communication disable: 1,189,330 frames across 32 addresses at about 20 Hz.
+- Current-code RadarInterface replay produced 37,167 outputs and 637,807 finite points; all 31 segment parsers finished valid. Eight startup-only outputs reported `canError` while messages warmed up.
 - Canonical route replay passed: 18,121 CAN events, 9,065 integrity-valid TCS13 frames, stopped `3044/3098` (98.26%), moving `5031/5031` (100%).
 
 This checkout has no standalone `SConstruct`, so the stale `scons -j8 opendbc/safety` command is not an available entrypoint. Safety tests compile `libsafety.so` directly with `cc`; both targeted and full coverage gates passed through that repository-native path.
@@ -71,12 +73,13 @@ This checkout has no standalone `SConstruct`, so the stale `scons -j8 opendbc/sa
 
 - Task 7 Step 5 remains open because subjective review failed the comfort criterion and the local tuning candidate has not been deployed or validated.
 - The active main-repository `radard.py` experiment is preserved but not proven necessary. It requires a clean-boot A/B without external message subscribers and must not be included in the opendbc PR.
-- Keep `steerRatio=15.2605`; the route supplied only 182 qualified seconds at about 40-59 km/h and no stable convergence.
+- The 116-minute highway route supports `steerRatio=16.4`: qualified median `16.402`, left/right `16.405/16.372`, and last-20-minute median `16.404` over 40-100 km/h.
+- Full `RadarD` lead-fusion replay remains unverified because the analysis checkout lacks a built `msgq` extension. Physical lead selection and false-lead behavior remain an on-car gate.
 
 ## Resume
 
-1. Push `681f9aaa` and `9c3031f0` only with explicit authorization; the remote draft PR still points to `13737ba0`.
-2. Deploy and validate the ride-quality candidate with the staged safety gates and a matched baseline/candidate route.
+1. Push the local follow-up branch only with explicit authorization; the remote draft PR still points to `13737ba0`.
+2. Deploy and validate `bc54535e` with the staged safety gates, Mando lead-selection checks, and a matched baseline/candidate route.
 3. Complete original-`radard.py` clean-boot A/B without external subscribers.
 4. Keep firmware, Params, route evidence, and unproven main-repository diagnostics outside the personal opendbc PR.
 

@@ -212,7 +212,9 @@ Full-rlog analysis found the fixed main `LongControl` start and stop paths overr
 
 Local commit `9c3031f0` adds an LF Hybrid-only candidate: `startingState=False`, `stoppingDecelRate=0.45`, and unchanged `stopAccel=-2.0`. It does not alter panda safety, override behavior, or CAN formats. The candidate passed offline tests but has not been pushed, deployed, or validated on-car.
 
-Keep `steerRatio=15.2605`. Only 182 seconds qualified, speed coverage was about 40-59 km/h, and the learned estimate did not converge. Collect 30-60 minutes at 40-100 km/h over gentle curves in both directions before reconsidering it.
+Follow-up commit `bc54535e` enables `MANDO_RADAR` and sets `steerRatio=16.4`. The backed-up Alpha Long route contains 1,189,330 bus-1 `0x500-0x51f` frames after SCC normal-communication disable. Current-code RadarInterface replay produced 37,167 outputs and 637,807 finite points with every segment parser ending valid.
+
+The separate 116-minute highway route supports `steerRatio=16.4`: qualified median `16.402`, left/right medians `16.405/16.372`, and last-20-minute median `16.404` over 40-100 km/h. Full RadarD lead fusion and false-lead behavior remain unverified until on-car validation.
 
 ## Safe Rollback
 

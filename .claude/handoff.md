@@ -10,6 +10,7 @@
 - Complete device modification, rollback, artifact, and PR-integration record: `docs/superpowers/plans/2026-07-11-sonata-lf-hev-long-device-handoff.md`.
 - Driver feedback and full-rlog analysis identified fixed `LongControl` starting/stopping commands as the ride-quality trigger.
 - Local follow-up commits `681f9aaa` and `9c3031f0` restore the deployed LKAS HUD behavior and add an LF Hybrid-only smooth start/stop candidate.
+- Local commit `bc54535e` enables route-verified Mando tracks and sets `steerRatio=16.4`.
 
 ## Current State
 
@@ -19,7 +20,7 @@
 - Active `radard.py` is the poll-all candidate, SHA-256 `8dc45dfcea53fdac181d875cd3abc72913b8cbd8d745de7ea3a0aebca572a865`.
 - Handoff Params: Alpha Long on, Always Offroad on, device offroad, Experimental Mode off.
 - No comma device was contacted during the at-home analysis.
-- Local follow-up branch `followup/sonata-lf-hev-long` contains the code candidate at `9c3031f0`; it has not been pushed or deployed.
+- Local follow-up branch `followup/sonata-lf-hev-long` contains the code candidate at `bc54535e`; it has not been pushed or deployed.
 - The HUD source now matches deployed `f62fb8fe`; the ride-quality tune is offline-only and unverified on-car.
 
 ## Verification
@@ -32,7 +33,9 @@
 - Road-test service validity was 100% after diagnostic subscribers were stopped.
 - Eleven active lead-following launches showed planner acceleration median `0.444 m/s²`, but `LongControl` requested fixed `1.0 m/s²` in every case.
 - Nine active lead-following stops showed planner acceleration median `-0.036 m/s²`, while `LongControl` requested median `-1.753 m/s²` and reached about `-2.0 m/s²`.
-- Follow-up gates pass: Hyundai safety 1,938 tests/208 skipped; Hyundai car 18/2 skipped; PandaRunner 9; car interface 267; replay regression 23; targeted `ruff`, `ty`, and `py_compile`.
+- Follow-up gates pass: Hyundai safety 1,938 tests/208 skipped; Hyundai car 19/2 skipped; radar interface 4; PandaRunner 9; car interface 267; replay regression 23; targeted `ruff`, `ty`, and `py_compile`.
+- Backed-up Alpha Long rlogs contain 1,189,330 Mando track frames across all 32 addresses after SCC normal-communication disable; current RadarInterface replay ends valid on all 31 segments.
+- Highway-route steering evidence supports `16.4`: qualified median `16.402`, left/right `16.405/16.372`, and last-20-minute median `16.404`.
 
 ## Decisions and Caveats
 
@@ -41,13 +44,13 @@
 - The harmful "live monitor" was repeated short-lived Python `SubMaster` diagnostics. msgq has 15 reader slots per service, subscriber close does not release a slot, and the 16th subscription evicts all readers. Never repeat live subscribers during validation; use offline qlog/rlog. Any touched session is contaminated until a full vehicle OFF/ON cycle and new route.
 - Draft PR `ku524/opendbc#1` remains at remote head `13737ba0`. The local follow-up branch contains the deployed HUD fix, but is not pushed and is not a proven deployable unit.
 - The LF Hybrid candidate keeps `stopAccel=-2.0`, disables the fixed starting state, and reduces `stoppingDecelRate` from `0.8` to `0.45`. It does not change panda safety or CAN message formats.
-- Keep configured `steerRatio=15.2605`: only 182 seconds qualified, speed coverage was about 40-59 km/h, and the learned result did not converge. The unverified `16.445` value is unsupported.
+- The candidate uses `steerRatio=16.4` and `MANDO_RADAR`. Full RadarD lead fusion and false-lead behavior remain on-car gates; enabling tracks does not restore factory AEB.
 - Do not commit panda binaries, Params, logs, or reverted diagnostic patches to the personal PR.
 - Do not comma-reboot while vehicle ignition stays on after radar disable. Use a full vehicle OFF/ON cycle to reset the radar ECU.
 
 ## Remaining
 
 1. Push the local follow-up branch only with explicit user authorization, then update the personal draft PR description.
-2. Deploy the candidate under the existing manual approval gates and run a matched baseline/candidate on-car A/B; factory AEB remains unavailable while the stock radar is disabled.
+2. Deploy `bc54535e` under the existing manual approval gates and run Mando lead-selection plus matched baseline/candidate A/B checks; factory AEB remains unavailable while the stock radar is disabled.
 3. Restore original `radard.py`, use a full vehicle OFF/ON cycle, and complete the clean no-external-subscriber PR-only A/B.
-4. Collect 30-60 minutes of higher-speed, both-direction gentle-curve data before reconsidering `steerRatio`.
+4. Validate the new static `steerRatio=16.4` during the same route without changing lateral torque limits.

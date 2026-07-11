@@ -30,10 +30,10 @@ Empirically confirmed by replaying the owner's route through `opendbc.car.logrea
 | 0x421 SCC12 has integrity | counter + 100% checksum; openpilot's computed SCC12 checksum matches → powertrain will accept openpilot accel |
 | All non-legacy RX slots satisfiable | slot (0x260 OR 0x371): 0x371 present (hybrid gas); 0x251, 0x4F1, 0x394, 0x421 all present on bus 0. 0x260 absent (fine, OR'd). |
 | StandStill polarity | ==1 stopped 98.2% (v<0.3), ==0 moving 100% (v>5) → `vehicle_moving = !bit47` |
-| Radar point frames | Prior presence claim withdrawn; review reports zero bus-1 0x500–0x535 frames in segments 0/2/3, pending independent recount → keep MANDO_RADAR disabled |
+| Radar point frames | Backed-up Alpha Long route has all bus-1 0x500–0x51f tracks at about 20 Hz after SCC normal-communication disable → MANDO_RADAR enabled in follow-up |
 | Hybrid gas live | E_EMS11 (0x371) `CR_Vcu_AccPedDep_Pos` has 95 distinct values, 4773 nonzero frames → driver override works |
 | 0x38d absent | → `USE_FCA` stays off → AEB-disable goes via SCC12 path (auto-handled) |
-| steerRatio | kinematic estimate ~15.6 (low speed) rising to ~18 (understeer at higher speed); default `13.27 * 1.15 = 15.26`, owner may refine from `liveParameters.steerRatio` on a highway route |
+| steerRatio | 116-minute highway route supports `16.4`: qualified median `16.402`, left/right `16.405/16.372`, last-20-minute median `16.404` |
 
 ## Prerequisites (one-time, not a task)
 
@@ -469,23 +469,22 @@ In `opendbc/car/hyundai/values.py`, immediately after the `HYUNDAI_SONATA_LF` en
 
 ```python
   # Personal fork: LF Hybrid on standard 'hyundai' safety with openpilot longitudinal.
-  # Flags = HYBRID only: NO LEGACY (so it uses standard hyundai safety + alphaLong available),
+  # Flags include HYBRID and route-verified MANDO_RADAR: NO LEGACY (standard Hyundai safety),
   # NO UNSUPPORTED_LONGITUDINAL (keeps alphaLongitudinalAvailable True), NO TCU_GEARS (hybrid uses
   # ELECT_GEAR). 0x386 integrity is relaxed via HyundaiSafetyFlags.ALT_STANDSTILL set in interface.py.
-  # steerRatio 13.27*1.15 mirrors the ICE LF and matches low-speed route estimate; refine from
-  # liveParameters.steerRatio on a highway route. mass ~1595 kg (LF Hybrid curb), owner-refinable.
+  # A 116-minute highway route supports steerRatio 16.4. mass ~1595 kg (LF Hybrid curb), owner-refinable.
   HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]),
                     support_type=SupportType.COMMUNITY, support_link="#community")],
-    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
-    flags=HyundaiFlags.HYBRID,
+    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=16.4),
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.MANDO_RADAR,
   )
 ```
 
-> **MANDO_RADAR:** the prior claim that segments 0/2/3 contain bus-1 0x500–0x535 radar point frames
-> is withdrawn. An independent recount of the canonical files found zero such frames in every
-> segment. Do not set `HyundaiFlags.MANDO_RADAR`; the platform remains on vision
-> lead data.
+> **MANDO_RADAR follow-up:** the backed-up Alpha Long route contains all bus-1 `0x500-0x51f`
+> addresses after bus-0 SCC normal-communication disable: 1,189,330 frames at about 20 Hz.
+> Current-code RadarInterface replay ends valid on every segment. Full RadarD lead selection and
+> false-lead behavior remain an on-car validation gate.
 
 - [ ] **Step 2: Add to the `STEER_MAX = 255` bucket (values.py)**
 
@@ -797,11 +796,11 @@ Create `docs/sonata-lf-hev-long-oncar.md`:
 - **Factory AEB/FCW is lost** while openpilot longitudinal is on (radar is disabled). This is
   inherent to radar-SCC openpilot longitudinal, not specific to this fork.
 - Longitudinal tune is not validated for this exact car; ride quality may differ from stock SCC.
-- steerRatio default is `13.27*1.15`; refine from `liveParameters.steerRatio` on a highway route.
+- steerRatio is `16.4`, supported by a 116-minute highway route with qualified median `16.402`.
 
 ## Do not
 - Do not run on a release branch. Do not open an upstream PR (this relaxes a safety check for one
-  car). Do not set MANDO_RADAR based on this route.
+  car). Do not treat offline MANDO parsing as final lead-quality validation; verify false leads and cut-ins on-car.
 ```
 
 - [ ] **Step 2: Commit**
