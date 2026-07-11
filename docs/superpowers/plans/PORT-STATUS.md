@@ -5,6 +5,7 @@
 **Baseline implementation HEAD:** `675f988d`
 **Review-hardened implementation:** `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
 **Device-tested port:** `f62fb8fe18d24c06c08755cab966d86b8b94e37d` on base `b9712d20`
+**Offline follow-up candidate:** `9c3031f043a434c1470857e9e0f4c8fa3d7c61d3` on `followup/sonata-lf-hev-long`
 
 ## Done (committed)
 
@@ -20,6 +21,8 @@
 | Lifecycle cleanup | `89a50b75` | Restored CP/SP deinit API, radar re-enable cleanup, and ALT RX precedence coverage |
 | Exception-safe cleanup | `6d6bf2c5` | Made PandaRunner initialization and exit cleanup best-effort while preserving primary exceptions |
 | Lifecycle fault coverage | `15ad0815` | Covered partial interface initialization and failure of every cleanup stage |
+| Deployed HUD parity | `681f9aaa` | Restored LF Hybrid modern LKAS HUD-field handling with focused regression coverage |
+| Ride-quality candidate | `9c3031f0` | Removed the fixed start state and reduced LF Hybrid stopping deceleration rate to `0.45` |
 
 ## Verification
 
@@ -32,7 +35,9 @@ The following results were rerun from the immutable hardening revision `15ad0815
 - Target Python files pass `ruff`, `ty check`, and `py_compile`; all 23 replay regression tests pass.
 - All 267 car-interface tests pass; all 9 PandaRunner lifecycle tests and focused Hyundai/signature tests pass.
 - Empty-fingerprint CarParams checks confirm standard Hyundai safety, LONG boundary behavior, HYBRID_GAS and ALT_STANDSTILL, with ESCC/NON_SCC off.
-- `carcontroller.py`, `hyundaican.py`, and `carstate.py` remain zero-diff.
+- Follow-up verification: Hyundai safety 1,938 tests/208 skipped; Hyundai car 18/2 skipped; PandaRunner 9; car interface 267; replay regression 23.
+- Follow-up target and replay files pass `ruff`, `ty`, `py_compile`, and `git diff --check`.
+- `carcontroller.py` and `carstate.py` remain zero-diff; `hyundaican.py` has only the deployed one-line LF Hybrid HUD inclusion.
 
 ## Adversarial Review Hardening
 
@@ -59,16 +64,20 @@ This checkout has no standalone `SConstruct`, so the stale `scons -j8 opendbc/sa
 - Panda RX invalid/fault counts, CAN invalid/timeouts, permanent steering faults, stock AEB, and stock FCW were zero.
 - Standstill/resume, brake disengagement, and gas override were exercised. Intermediate disengagements were driver-initiated.
 - All required route logs and recovery artifacts were copied to the laptop and verified by SHA-256. See `2026-07-11-sonata-lf-hev-long-device-handoff.md`.
+- Driver feedback: no unintended acceleration/braking or warnings; hold/resume and pedal overrides worked; launch and final-stop comfort were unacceptable.
+- Offline attribution: 11 lead launches had planner median `0.444 m/s²` versus fixed request `1.0 m/s²`; 9 lead stops had planner median `-0.036 m/s²` versus request median `-1.753 m/s²`.
 
 ## Remaining Gate
 
-- Task 7 Step 5 remains open only for the driver's subjective review: unintended acceleration/braking, launch strength, override feel, warnings, and comfort.
+- Task 7 Step 5 remains open because subjective review failed the comfort criterion and the local tuning candidate has not been deployed or validated.
 - The active main-repository `radard.py` experiment is preserved but not proven necessary. It requires a clean-boot A/B without external message subscribers and must not be included in the opendbc PR.
+- Keep `steerRatio=15.2605`; the route supplied only 182 qualified seconds at about 40-59 km/h and no stable convergence.
 
 ## Resume
 
-1. Analyze the copied route and correlate the driver's subjective observations.
-2. Integrate the deployed `f62fb8fe` opendbc history into the personal branch, then rerun focused safety, interface, lifecycle, and replay gates.
-3. Keep firmware, Params, route evidence, and unproven main-repository diagnostics outside the personal opendbc PR.
+1. Push `681f9aaa` and `9c3031f0` only with explicit authorization; the remote draft PR still points to `13737ba0`.
+2. Deploy and validate the ride-quality candidate with the staged safety gates and a matched baseline/candidate route.
+3. Complete original-`radard.py` clean-boot A/B without external subscribers.
+4. Keep firmware, Params, route evidence, and unproven main-repository diagnostics outside the personal opendbc PR.
 
 This is a personal fork change. Do not open an upstream PR against sunnypilot or commaai.

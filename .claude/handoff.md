@@ -2,12 +2,14 @@
 
 ## Done
 
-- Tasks 1 through 6 remain implemented on personal branch `sonata-lf-hev-long-sp` at `e5a55c9e`.
+- Tasks 1 through 6 remain implemented on personal branch `sonata-lf-hev-long-sp` at remote revision `13737ba0`.
 - Device-compatible opendbc work is preserved on `sonata-lf-hev-long-sp-device-b971` at `f62fb8fe`, with a complete verified Git bundle.
 - Task 7 Steps 1 through 4 are complete: source deployment, device build, panda auto-reflash verification, and Alpha Longitudinal enablement.
 - A long urban-road drive exercised engagement, deliberate disengagement, standstill/resume, brake disengagement, and gas override.
 - Required route evidence, active source patch, Params, exact firmware, pre-custom rollback, and experimental radard originals were copied to `/Users/mark.yeon/Documents/work/oss/sunny_opendbc-device-backups`.
 - Complete device modification, rollback, artifact, and PR-integration record: `docs/superpowers/plans/2026-07-11-sonata-lf-hev-long-device-handoff.md`.
+- Driver feedback and full-rlog analysis identified fixed `LongControl` starting/stopping commands as the ride-quality trigger.
+- Local follow-up commits `681f9aaa` and `9c3031f0` restore the deployed LKAS HUD behavior and add an LF Hybrid-only smooth start/stop candidate.
 
 ## Current State
 
@@ -16,7 +18,9 @@
 - Active panda firmware SHA-256: `095e3486bf09b42a6d26ce40ab6be55fd0115dc8aefd7181a0187bbfcfc585f1`.
 - Active `radard.py` is the poll-all candidate, SHA-256 `8dc45dfcea53fdac181d875cd3abc72913b8cbd8d745de7ea3a0aebca572a865`.
 - Handoff Params: Alpha Long on, Always Offroad on, device offroad, Experimental Mode off.
-- No more direct device work is required for route analysis.
+- No comma device was contacted during the at-home analysis.
+- Local follow-up branch `followup/sonata-lf-hev-long` contains the code candidate at `9c3031f0`; it has not been pushed or deployed.
+- The HUD source now matches deployed `f62fb8fe`; the ride-quality tune is offline-only and unverified on-car.
 
 ## Verification
 
@@ -26,19 +30,24 @@
 - Road-test raw CAN: zero stock SCC, openpilot SCC11/SCC12 at about 50 Hz, tester-present at about 1 Hz, no dual SCC.
 - Panda RX invalid/fault, CAN invalid/timeout, permanent steer fault, stock AEB, and stock FCW counts were zero.
 - Road-test service validity was 100% after diagnostic subscribers were stopped.
+- Eleven active lead-following launches showed planner acceleration median `0.444 m/s²`, but `LongControl` requested fixed `1.0 m/s²` in every case.
+- Nine active lead-following stops showed planner acceleration median `-0.036 m/s²`, while `LongControl` requested median `-1.753 m/s²` and reached about `-2.0 m/s²`.
+- Follow-up gates pass: Hyundai safety 1,938 tests/208 skipped; Hyundai car 18/2 skipped; PandaRunner 9; car interface 267; replay regression 23; targeted `ruff`, `ty`, and `py_compile`.
 
 ## Decisions and Caveats
 
 - `radard.py` is not part of opendbc and its necessity is unproven. Preserve it, but do not merge it before a clean-boot A/B with no diagnostic message subscribers.
 - The intermittent communication issue correlated with diagnostic SubMaster reader-slot exhaustion and stopped when those subscribers stopped. Original radard had already passed a clean 225-second session.
 - The harmful "live monitor" was repeated short-lived Python `SubMaster` diagnostics. msgq has 15 reader slots per service, subscriber close does not release a slot, and the 16th subscription evicts all readers. Never repeat live subscribers during validation; use offline qlog/rlog. Any touched session is contaminated until a full vehicle OFF/ON cycle and new route.
-- Draft PR `ku524/opendbc#1` at `e5a55c9e` is not yet identical to deployed `f62fb8fe`: the deployed LKAS HUD preservation change is absent, the device branch is unpushed, and PR-only runtime with original radard has not completed a clean A/B.
+- Draft PR `ku524/opendbc#1` remains at remote head `13737ba0`. The local follow-up branch contains the deployed HUD fix, but is not pushed and is not a proven deployable unit.
+- The LF Hybrid candidate keeps `stopAccel=-2.0`, disables the fixed starting state, and reduces `stoppingDecelRate` from `0.8` to `0.45`. It does not change panda safety or CAN message formats.
+- Keep configured `steerRatio=15.2605`: only 182 seconds qualified, speed coverage was about 40-59 km/h, and the learned result did not converge. The unverified `16.445` value is unsupported.
 - Do not commit panda binaries, Params, logs, or reverted diagnostic patches to the personal PR.
 - Do not comma-reboot while vehicle ignition stays on after radar disable. Use a full vehicle OFF/ON cycle to reset the radar ECU.
 
 ## Remaining
 
-1. Record subjective impressions: unintended acceleration/braking, launch strength, brake/gas override feel, warnings, and comfort.
-2. Analyze copied route evidence against those observations.
-3. Integrate the eight deployed opendbc commits through `f62fb8fe` into the updated personal branch.
-4. Rerun focused safety, Hyundai interface, lifecycle, and replay tests before updating the personal PR.
+1. Push the local follow-up branch only with explicit user authorization, then update the personal draft PR description.
+2. Deploy the candidate under the existing manual approval gates and run a matched baseline/candidate on-car A/B; factory AEB remains unavailable while the stock radar is disabled.
+3. Restore original `radard.py`, use a full vehicle OFF/ON cycle, and complete the clean no-external-subscriber PR-only A/B.
+4. Collect 30-60 minutes of higher-speed, both-direction gentle-curve data before reconsidering `steerRatio`.

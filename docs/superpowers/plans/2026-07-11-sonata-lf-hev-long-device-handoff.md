@@ -164,18 +164,18 @@ None of these reverted experiments belongs in the personal PR.
 
 ## Current Draft PR Is Not Yet the Deployable Unit
 
-GitHub draft PR [`ku524/opendbc#1`](https://github.com/ku524/opendbc/pull/1) is open with head `e5a55c9e` and base `ffa13083`. The vehicle-tested branch is `sonata-lf-hev-long-sp-device-b971` at `f62fb8fe`, based on common ancestor `b9712d20`.
+GitHub draft PR [`ku524/opendbc#1`](https://github.com/ku524/opendbc/pull/1) is open with head `13737ba0` and base `ffa13083`. The vehicle-tested branch is `sonata-lf-hev-long-sp-device-b971` at `f62fb8fe`, based on common ancestor `b9712d20`.
 
 The draft PR is not identical to the vehicle-tested source:
 
-- The deployed `383e9dbd` LKAS HUD preservation change in `hyundaican.py` is absent from PR head `e5a55c9e`.
+- The deployed `383e9dbd` LKAS HUD preservation change is reconciled locally as `681f9aaa`, but is absent from remote PR head `13737ba0`.
 - The device-tested branch is only local and in the verified bundle; it is not pushed to the fork.
 - The long road test ran with the separate main-repository `radard.py` candidate active. Its necessity is unproven, and a clean original-radard A/B has not yet proved PR-only runtime equivalence.
 
 Therefore the current draft PR alone is not yet a proven recipe for another comma 3X. Before making that claim:
 
-1. Integrate the deployed HUD fix and reconcile the device-tested commits with PR head.
-2. Run the focused opendbc test gates from the consolidated PR revision.
+1. Push the locally reconciled HUD and ride-quality commits only after explicit authorization.
+2. Re-run the focused opendbc test gates if the pushed revision differs from the verified local revision.
 3. Restore original `radard.py`, perform a full vehicle OFF/ON cycle, and validate without external message subscribers.
 4. Record a clean PR-only on-car route with the same radar-disable, SCC, panda, override, and service-validity gates.
 
@@ -200,7 +200,19 @@ Route segments 19 through 43 provide about 25 minutes of raw-CAN driving evidenc
 
 The 17 SCC12 safety rejections occurred 1 to 80 ms before qlog brake/active endings while requested acceleration was still nonzero. This is consistent with panda stopping an outgoing command before the later qlog state transition, not a dual-SCC or CAN-integrity failure.
 
-Subjective review remains: unintended acceleration/braking, stop/resume launch strength, brake/gas override feel, warnings seen, and comfort. The copied route contains the required evidence for correlating those observations at home.
+Subjective review found no unintended acceleration/braking or warnings, and both pedal overrides were immediate. Standstill hold and resume worked, but launch acceleration and final-stop deceleration were too abrupt, so the comfort criterion failed.
+
+## At-Home Ride-Quality Follow-Up
+
+Full-rlog analysis found the fixed main `LongControl` start and stop paths overriding gentler planner targets:
+
+- 11 clean active lead-following launches: planner target median `0.444 m/s²`; `LongControl` requested exactly `1.0 m/s²` in all 11.
+- 9 clean active lead-following stops: planner target median `-0.036 m/s²`; `LongControl` request median `-1.753 m/s²` and reached about `-2.0 m/s²`.
+- Hyundai controller output matched the request, and panda/CAN validity remained clean. The evidence does not support controller amplification or planner-only aggression.
+
+Local commit `9c3031f0` adds an LF Hybrid-only candidate: `startingState=False`, `stoppingDecelRate=0.45`, and unchanged `stopAccel=-2.0`. It does not alter panda safety, override behavior, or CAN formats. The candidate passed offline tests but has not been pushed, deployed, or validated on-car.
+
+Keep `steerRatio=15.2605`. Only 182 seconds qualified, speed coverage was about 40-59 km/h, and the learned estimate did not converge. Collect 30-60 minutes at 40-100 km/h over gentle curves in both directions before reconsidering it.
 
 ## Safe Rollback
 
@@ -233,8 +245,8 @@ Then perform the same full vehicle OFF/ON cycle. The laptop original is `radard-
 ## Personal PR Integration Path
 
 1. Treat `sonata-lf-hev-long-sp-device-b971` at `f62fb8fe` as the deployed source truth. The bundle can recreate it if the worktree is lost.
-2. Rebase or cherry-pick the eight commits onto the updated personal opendbc branch, resolving upstream changes in source and tests together.
-3. Re-run targeted safety, Hyundai interface, lifecycle, and replay tests before updating the personal PR.
+2. Local branch `followup/sonata-lf-hev-long` reconciles the deployed HUD behavior and contains the offline ride-quality code candidate at `9c3031f0`.
+3. Push the local follow-up commits and update the personal draft PR only with explicit authorization.
 4. Exclude `panda_h7.bin.signed`, Params snapshots, route logs, and temporary diagnostic patches from the PR.
 5. Handle `radard.py` only in a separate sunnypilot main-repository change after clean A/B evidence proves it is required.
 

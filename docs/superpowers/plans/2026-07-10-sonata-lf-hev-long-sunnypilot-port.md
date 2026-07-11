@@ -491,7 +491,12 @@ Follow `docs/sonata-lf-hev-long-oncar.md` from the reference repo (also bundled 
 > `staging@3781e253`, panda firmware SHA-256 `095e3486bf09b42a6d26ce40ab6be55fd0115dc8aefd7181a0187bbfcfc585f1`
 > was auto-reflashed, and the radar-disable gate passed with zero stock SCC frames and no dual SCC
 > during the road test. Standstill/resume, brake disengagement, and gas override were exercised.
-> Objective route checks passed; subjective ride-quality review remains, so Step 5 stays open.
+> Objective route checks passed. Subjective review found no unintended control or warnings and
+> confirmed correct hold/resume and overrides, but launch and final-stop comfort failed. Full-rlog
+> analysis attributed this to fixed `LongControl` start/stop commands overriding gentler planner
+> targets. Local commit `9c3031f0` adds an LF Hybrid-only candidate with `startingState=False` and
+> `stoppingDecelRate=0.45`, while keeping `stopAccel=-2.0`. Offline gates pass, but the candidate has
+> not been pushed, deployed, or validated on-car, so Step 5 stays open.
 > Required evidence and rollback artifacts are indexed in
 > `2026-07-11-sonata-lf-hev-long-device-handoff.md`.
 
