@@ -12,10 +12,11 @@
    - `.claude/handoff.md`
    - `docs/superpowers/plans/PORT-STATUS.md`
    - `docs/superpowers/plans/2026-07-10-sonata-lf-hev-long-sunnypilot-port.md`
+   - `docs/superpowers/plans/2026-07-11-sonata-lf-hev-on-car-validation-checklist.md`
 6. 개인 draft PR은 `https://github.com/ku524/opendbc/pull/1`이다.
 7. 업스트림 sunnypilot/commaai PR은 만들거나 수정하지 마.
 
-목표는 Task 7의 실제 기기 배포 및 차량 검증이다. 업스트림 merge 품질을 위한 추가 test hardening, 범용 refactor, 리뷰 문서 갱신은 하지 마. 실제 차량 runtime, panda safety, 배포에 직접 필요한 작업만 수행해.
+목표는 Task 7의 실제 기기 배포 및 차량 검증이다. 차량 검증 순서, 설정, 중단 조건, 수집할 증거는 전용 on-car checklist를 source of truth로 사용해. 업스트림 merge 품질을 위한 추가 test hardening, 범용 refactor, 리뷰 문서 갱신은 하지 마. 실제 차량 runtime, panda safety, 배포에 직접 필요한 작업만 수행해.
 
 ## A. 배포 전 기록
 
