@@ -3,14 +3,14 @@ from hypothesis import settings, given, strategies as st
 import unittest
 from unittest.mock import Mock, patch
 
-from opendbc.car import gen_empty_fingerprint
+from opendbc.car import Bus, gen_empty_fingerprint
 from opendbc.car.docs_definitions import SupportType
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
 from opendbc.car.hyundai import hyundaican
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
+from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, RadarInterface, get_radar_can_parser
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
                                          UNSUPPORTED_LONGITUDINAL_CAR, PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
@@ -100,6 +100,29 @@ class TestHyundaiFingerprint(unittest.TestCase):
 
     lateral_only_params, _ = self._sonata_lf_hybrid_long_params(alpha_long=False)
     self.assertFalse(lateral_only_params.openpilotLongitudinalControl)
+
+  def test_sonata_lf_hybrid_uses_mando_radar_and_route_steer_ratio(self):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[1][RADAR_START_ADDR] = 8
+
+    car_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+
+    self.assertTrue(car_params.flags & HyundaiFlags.MANDO_RADAR)
+    self.assertFalse(car_params.radarUnavailable)
+    self.assertEqual(CAR.HYUNDAI_SONATA_LF_HYBRID.config.dbc_dict[Bus.radar], "hyundai_kia_mando_front_radar_generated")
+    self.assertIsNotNone(get_radar_can_parser(car_params))
+    self.assertAlmostEqual(car_params.steerRatio, 16.4, places=5)
+    car_params_sp = CarInterface.get_params_sp(car_params, CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+    radar_interface = RadarInterface(car_params, car_params_sp)
+    self.assertFalse(radar_interface.radar_off_can)
+
+    no_track_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, gen_empty_fingerprint(), [], True, False, False)
+    self.assertTrue(no_track_params.radarUnavailable)
+    no_track_params_sp = CarInterface.get_params_sp(no_track_params, CAR.HYUNDAI_SONATA_LF_HYBRID,
+                                                     gen_empty_fingerprint(), [], True, False, False)
+    no_track_radar_interface = RadarInterface(no_track_params, no_track_params_sp)
+    self.assertIsNotNone(no_track_radar_interface.rcp)
+    self.assertTrue(no_track_radar_interface.radar_off_can)
 
   def test_sonata_lf_hybrid_long_deinit_reenables_radar(self):
     car_params, car_params_sp = self._sonata_lf_hybrid_long_params()

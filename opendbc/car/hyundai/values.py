@@ -354,8 +354,9 @@ class CAR(Platforms):
   HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
     [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]),
                     support_type=SupportType.COMMUNITY, support_link="#community")],
-    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
-    flags=HyundaiFlags.HYBRID,
+    # Owner routes converge near 16.4 and retain 0x500-0x51f tracks while the SCC ECU is disabled.
+    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=16.4),
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.MANDO_RADAR,
   )
   HYUNDAI_STARIA_4TH_GEN = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Staria 2023", "All", car_parts=CarParts.common([CarHarness.hyundai_k]))],
