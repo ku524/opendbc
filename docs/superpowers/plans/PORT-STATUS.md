@@ -6,6 +6,7 @@
 **Review-hardened implementation:** `15ad0815eb1dd1895f0b3584e0cddf7dbc4dc0aa`
 **Device-tested port:** `f62fb8fe18d24c06c08755cab966d86b8b94e37d` on base `b9712d20`
 **Offline follow-up candidate:** `bc54535e` on `followup/sonata-lf-hev-long`
+**Next laptop prompt:** `2026-07-14-sonata-lf-hev-followup-laptop-deployment-prompt.md`
 **Next on-car procedure:** `2026-07-11-sonata-lf-hev-on-car-validation-checklist.md`
 
 ## Done (committed)
@@ -79,7 +80,7 @@ This checkout has no standalone `SConstruct`, so the stale `scons -j8 opendbc/sa
 
 ## Resume
 
-1. Deploy the current personal-branch HEAD by following `2026-07-11-sonata-lf-hev-on-car-validation-checklist.md` from the vehicle-side laptop.
+1. Start with `2026-07-14-sonata-lf-hev-followup-laptop-deployment-prompt.md`, then deploy the current personal-branch HEAD using the linked on-car checklist.
 2. Validate the candidate with the staged safety gates, Mando lead-selection checks, and matched `Off`/`Dynamic` routes.
 3. Complete original-`radard.py` clean-boot A/B without external subscribers.
 4. Keep firmware, Params, route evidence, and unproven main-repository diagnostics outside the personal opendbc PR.

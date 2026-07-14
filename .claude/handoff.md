@@ -11,7 +11,7 @@
 - Driver feedback and full-rlog analysis identified fixed `LongControl` starting/stopping commands as the ride-quality trigger.
 - Local follow-up commits `681f9aaa` and `9c3031f0` restore the deployed LKAS HUD behavior and add an LF Hybrid-only smooth start/stop candidate.
 - Local commit `bc54535e` enables route-verified Mando tracks and sets `steerRatio=16.4`.
-- The different-laptop deployment and staged vehicle procedure is recorded in `docs/superpowers/plans/2026-07-11-sonata-lf-hev-on-car-validation-checklist.md`.
+- The different-laptop resume prompt is `docs/superpowers/plans/2026-07-14-sonata-lf-hev-followup-laptop-deployment-prompt.md`; its staged vehicle procedure is `2026-07-11-sonata-lf-hev-on-car-validation-checklist.md`.
 
 ## Current State
 
@@ -51,7 +51,7 @@
 
 ## Remaining
 
-1. Deploy the current personal-branch HEAD by following `2026-07-11-sonata-lf-hev-on-car-validation-checklist.md` on the vehicle-side laptop.
+1. Start the vehicle-side laptop session with `2026-07-14-sonata-lf-hev-followup-laptop-deployment-prompt.md`, then follow the linked on-car checklist.
 2. Run Mando lead-selection plus matched `Off`/`Dynamic` checks; factory AEB remains unavailable while the stock radar is disabled.
 3. Restore original `radard.py`, use a full vehicle OFF/ON cycle, and complete the clean no-external-subscriber PR-only A/B.
 4. Validate the new static `steerRatio=16.4` during the same route without changing lateral torque limits.

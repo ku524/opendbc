@@ -1,5 +1,7 @@
 # Sonata LF Hybrid Laptop Deployment Prompt
 
+> Historical initial-deployment prompt. Do not use this document to deploy the post-road-test follow-up candidate. Use `2026-07-14-sonata-lf-hev-followup-laptop-deployment-prompt.md` instead.
+
 `/Users/mark.yeon/Documents/work/oss/sunny_opendbc`에서 Sonata LF Hybrid 개인 fork 작업을 이어서 진행해줘.
 
 먼저 다음을 수행해:

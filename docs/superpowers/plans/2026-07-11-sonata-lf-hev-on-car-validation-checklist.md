@@ -13,7 +13,7 @@ This is a manual vehicle test. The driver remains responsible for control. Facto
 - Draft PR: `https://github.com/ku524/opendbc/pull/1`
 - Core follow-up code commit: `bc54535e`
 - Device and rollback record: `2026-07-11-sonata-lf-hev-long-device-handoff.md`
-- Laptop bootstrap prompt: `2026-07-10-sonata-lf-hev-long-laptop-deployment-prompt.md`
+- Follow-up laptop deployment prompt: `2026-07-14-sonata-lf-hev-followup-laptop-deployment-prompt.md`
 
 On the new laptop, fetch the branch and record its current remote HEAD. Do not assume the short commit above is the branch tip because documentation commits may follow it.
 
