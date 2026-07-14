@@ -152,6 +152,13 @@ class CarInterface(CarInterfaceBase):
     if candidate == CAR.KIA_OPTIMA_G4_FL:
       ret.steerActuatorDelay = 0.2
 
+    # WHL_SPD11 lacks valid integrity on this platform; TCS13 provides standstill instead.
+    if candidate == CAR.HYUNDAI_SONATA_LF_HYBRID:
+      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_STANDSTILL.value
+      # Route evidence shows the generic fixed start and final-stop ramp override much gentler planner targets.
+      ret.startingState = False
+      ret.stoppingDecelRate = 0.45
+
     # Dashcam cars are missing a test route, or otherwise need validation
     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
     if candidate in (CAR.KIA_OPTIMA_H,):
@@ -244,6 +251,6 @@ class CarInterface(CarInterfaceBase):
       disable_ecu(can_recv, can_send, bus=CanBus(CP).ECAN, addr=0x7B1, com_cont_req=communication_control)
 
   @staticmethod
-  def deinit(CP, can_recv, can_send):
+  def deinit(CP, CP_SP, can_recv, can_send):
     communication_control = bytes([uds.SERVICE_TYPE.COMMUNICATION_CONTROL, 0x80 | uds.CONTROL_TYPE.ENABLE_RX_ENABLE_TX, uds.MESSAGE_TYPE.NORMAL])
-    CarInterface.init(CP, can_recv, can_send, communication_control)
+    CarInterface.init(CP, CP_SP, can_recv, can_send, communication_control=communication_control)

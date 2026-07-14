@@ -37,7 +37,8 @@ class CarControllerParams:
     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
     # If the max stock LKAS request is <384, add your car to this list.
     elif CP.carFingerprint in (CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA, CAR.HYUNDAI_ELANTRA_GT_I30, CAR.HYUNDAI_IONIQ,
-                               CAR.HYUNDAI_IONIQ_EV_LTD, CAR.HYUNDAI_SANTA_FE_PHEV_2022, CAR.HYUNDAI_SONATA_LF, CAR.KIA_FORTE, CAR.KIA_NIRO_PHEV,
+                               CAR.HYUNDAI_IONIQ_EV_LTD, CAR.HYUNDAI_SANTA_FE_PHEV_2022, CAR.HYUNDAI_SONATA_LF,
+                               CAR.HYUNDAI_SONATA_LF_HYBRID, CAR.KIA_FORTE, CAR.KIA_NIRO_PHEV,
                                CAR.KIA_OPTIMA_H, CAR.KIA_OPTIMA_H_G4_FL, CAR.KIA_SORENTO):
       self.STEER_MAX = 255
 
@@ -68,6 +69,11 @@ class HyundaiSafetyFlags(IntFlag):
   CANFD_LKA_STEER_MSG_ALT = 128
   FCEV_GAS = 256
   ALT_LIMITS_2 = 512
+  # Personal fork (Sonata LF Hybrid): car runs standard 'hyundai' safety but WHL_SPD11 (0x386)
+  # has no valid counter/checksum. This bit tells the panda safety RX check to skip 0x386 integrity
+  # (that message only) and derive vehicle_moving from TCS13 (0x394) StandStill instead.
+  # Value MUST match HYUNDAI_PARAM_ALT_STANDSTILL in opendbc/safety/modes/hyundai_common.h.
+  ALT_STANDSTILL = 1024
 
 
 # Hyundai/Kia/Genesis SCC (Smart Cruise Control) and steering architecture:
@@ -343,6 +349,14 @@ class CAR(Platforms):
     [HyundaiCarDocs("Hyundai Sonata 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
     CarSpecs(mass=1536, wheelbase=2.804, steerRatio=13.27 * 1.15),  # 15% higher at the center seems reasonable
     flags=HyundaiFlags.UNSUPPORTED_LONGITUDINAL | HyundaiFlags.TCU_GEARS,
+  )
+  # Personal fork: LF Hybrid uses standard Hyundai safety with 0x386 integrity relaxed separately.
+  HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
+    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]),
+                    support_type=SupportType.COMMUNITY, support_link="#community")],
+    # Owner routes converge near 16.4 and retain 0x500-0x51f tracks while the SCC ECU is disabled.
+    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=16.4),
+    flags=HyundaiFlags.HYBRID | HyundaiFlags.MANDO_RADAR,
   )
   HYUNDAI_STARIA_4TH_GEN = HyundaiCanFDPlatformConfig(
     [HyundaiCarDocs("Hyundai Staria 2023", "All", car_parts=CarParts.common([CarHarness.hyundai_k]))],

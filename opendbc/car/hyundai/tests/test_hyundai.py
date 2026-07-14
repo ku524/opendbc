@@ -1,19 +1,23 @@
 from hypothesis import settings, given, strategies as st
 
 import unittest
+from unittest.mock import Mock, patch
 
-from opendbc.car import gen_empty_fingerprint
+from opendbc.car import Bus, gen_empty_fingerprint
+from opendbc.car.docs_definitions import SupportType
 from opendbc.car.structs import CarParams
 from opendbc.car.fw_versions import build_fw_dict
+from opendbc.car.hyundai import hyundaican
 from opendbc.car.hyundai.interface import CarInterface
 from opendbc.car.hyundai.hyundaicanfd import CanBus
-from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR
+from opendbc.car.hyundai.radar_interface import RADAR_START_ADDR, RadarInterface, get_radar_can_parser
 from opendbc.car.hyundai.values import CAMERA_SCC_CAR, CANFD_CAR, CAN_GEARS, CAR, CHECKSUM, DATE_FW_ECUS, \
                                          HYBRID_CAR, EV_CAR, FW_QUERY_CONFIG, LEGACY_SAFETY_MODE_CAR, CANFD_FUZZY_WHITELIST, \
                                          UNSUPPORTED_LONGITUDINAL_CAR, PLATFORM_CODE_ECUS, HYUNDAI_VERSION_REQUEST_LONG, \
                                          HyundaiFlags, get_platform_codes, HyundaiSafetyFlags, \
                                          NON_SCC_CAR
 from opendbc.car.hyundai.fingerprints import FW_VERSIONS
+from opendbc.sunnypilot.car.hyundai.values import HyundaiFlagsSP
 
 Ecu = CarParams.Ecu
 
@@ -45,6 +49,101 @@ CANFD_EXPECTED_ECUS = {Ecu.fwdCamera, Ecu.fwdRadar}
 
 
 class TestHyundaiFingerprint(unittest.TestCase):
+  @staticmethod
+  def _sonata_lf_hybrid_long_params(alpha_long=True):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[0][0x544] = 8
+    fingerprint[2][0x53E] = 8
+    car_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], alpha_long, False, False)
+    car_params_sp = CarInterface.get_params_sp(car_params, CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], alpha_long, False, False)
+    return car_params, car_params_sp
+
+  def test_personal_fork_support_metadata(self):
+    car_docs = CAR.HYUNDAI_SONATA_LF_HYBRID.config.car_docs
+    assert len(car_docs) == 1
+    assert car_docs[0].support_type == SupportType.COMMUNITY
+    assert car_docs[0].support_link == "#community"
+
+  def test_sonata_lf_hybrid_uses_modern_lkas_hud_fields(self):
+    class RecordingPacker:
+      latest_values: dict[str, int] = {}
+
+      def make_can_msg(self, _message_name, bus, values):
+        self.latest_values = dict(values)
+        return 0, b"\x00" * 8, bus
+
+    lkas11 = {
+      signal: 0 for signal in (
+        "CF_Lkas_LdwsActivemode", "CF_Lkas_LdwsSysState", "CF_Lkas_SysWarning",
+        "CF_Lkas_LdwsLHWarning", "CF_Lkas_LdwsRHWarning", "CF_Lkas_HbaLamp",
+        "CF_Lkas_FcwBasReq", "CF_Lkas_HbaSysState", "CF_Lkas_FcwOpt", "CF_Lkas_HbaOpt",
+        "CF_Lkas_FcwSysState", "CF_Lkas_FcwCollisionWarning", "CF_Lkas_FusionState",
+        "CF_Lkas_FcwOpt_USM", "CF_Lkas_LdwsOpt_USM",
+      )
+    }
+    packer = RecordingPacker()
+    car_params = Mock(carFingerprint=CAR.HYUNDAI_SONATA_LF_HYBRID, flags=0)
+
+    hyundaican.create_lkas11(packer, 0, car_params, 0, False, False, lkas11, False, 1, True,
+                             True, False, 0, 0, 2)
+
+    self.assertEqual(packer.latest_values["CF_Lkas_LdwsActivemode"], 1)
+    self.assertEqual(packer.latest_values["CF_Lkas_LdwsOpt_USM"], 2)
+    self.assertEqual(packer.latest_values["CF_Lkas_FcwOpt_USM"], 2)
+
+  def test_sonata_lf_hybrid_uses_smooth_start_stop_params(self):
+    car_params, _ = self._sonata_lf_hybrid_long_params()
+
+    self.assertFalse(car_params.startingState)
+    self.assertAlmostEqual(car_params.stoppingDecelRate, 0.45)
+    self.assertAlmostEqual(car_params.stopAccel, -2.0)
+
+    lateral_only_params, _ = self._sonata_lf_hybrid_long_params(alpha_long=False)
+    self.assertFalse(lateral_only_params.openpilotLongitudinalControl)
+
+  def test_sonata_lf_hybrid_uses_mando_radar_and_route_steer_ratio(self):
+    fingerprint = gen_empty_fingerprint()
+    fingerprint[1][RADAR_START_ADDR] = 8
+
+    car_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+
+    self.assertTrue(car_params.flags & HyundaiFlags.MANDO_RADAR)
+    self.assertFalse(car_params.radarUnavailable)
+    self.assertEqual(CAR.HYUNDAI_SONATA_LF_HYBRID.config.dbc_dict[Bus.radar], "hyundai_kia_mando_front_radar_generated")
+    self.assertIsNotNone(get_radar_can_parser(car_params))
+    self.assertAlmostEqual(car_params.steerRatio, 16.4, places=5)
+    car_params_sp = CarInterface.get_params_sp(car_params, CAR.HYUNDAI_SONATA_LF_HYBRID, fingerprint, [], True, False, False)
+    radar_interface = RadarInterface(car_params, car_params_sp)
+    self.assertFalse(radar_interface.radar_off_can)
+
+    no_track_params = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, gen_empty_fingerprint(), [], True, False, False)
+    self.assertTrue(no_track_params.radarUnavailable)
+    no_track_params_sp = CarInterface.get_params_sp(no_track_params, CAR.HYUNDAI_SONATA_LF_HYBRID,
+                                                     gen_empty_fingerprint(), [], True, False, False)
+    no_track_radar_interface = RadarInterface(no_track_params, no_track_params_sp)
+    self.assertIsNotNone(no_track_radar_interface.rcp)
+    self.assertTrue(no_track_radar_interface.radar_off_can)
+
+  def test_sonata_lf_hybrid_long_deinit_reenables_radar(self):
+    car_params, car_params_sp = self._sonata_lf_hybrid_long_params()
+    self.assertEqual(car_params_sp.flags, HyundaiFlagsSP.SPEED_LIMIT_AVAILABLE | HyundaiFlagsSP.HAS_LKAS12)
+    can_recv = Mock()
+    can_send = Mock()
+
+    with patch("opendbc.car.hyundai.interface.disable_ecu") as disable_ecu_mock:
+      CarInterface.deinit(car_params, car_params_sp, can_recv, can_send)
+
+    disable_ecu_mock.assert_called_once_with(can_recv, can_send, bus=0, addr=0x7D0, com_cont_req=b"\x28\x80\x01")
+
+  def test_sonata_lf_hybrid_deinit_preserves_enhanced_scc(self):
+    car_params, car_params_sp = self._sonata_lf_hybrid_long_params()
+    car_params_sp.flags |= HyundaiFlagsSP.ENHANCED_SCC
+
+    with patch("opendbc.car.hyundai.interface.disable_ecu") as disable_ecu_mock:
+      CarInterface.deinit(car_params, car_params_sp, Mock(), Mock())
+
+    disable_ecu_mock.assert_not_called()
+
   def test_feature_detection(self):
     # LKA steering
     for lka_steering in (True, False):
@@ -149,7 +248,8 @@ class TestHyundaiFingerprint(unittest.TestCase):
   def test_platform_code_ecus_available(self):
     # TODO: add queries for these non-CAN FD cars to get EPS
     no_eps_platforms = CANFD_CAR | {CAR.KIA_SORENTO, CAR.KIA_OPTIMA_G4, CAR.KIA_OPTIMA_G4_FL, CAR.KIA_OPTIMA_H, CAR.KIA_K7_2017,
-                                    CAR.KIA_OPTIMA_H_G4_FL, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_TUCSON, CAR.GENESIS_G90, CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA}
+                                    CAR.KIA_OPTIMA_H_G4_FL, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_SONATA_LF_HYBRID,
+                                    CAR.HYUNDAI_TUCSON, CAR.GENESIS_G90, CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA}
 
     # Asserts ECU keys essential for fuzzy fingerprinting are available on all platforms
     for car_model, ecus in FW_VERSIONS.items():

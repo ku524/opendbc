@@ -233,6 +233,14 @@ FW_VERSIONS = {
       b'\xf1\x00LFF LKAS AT USA LHD 1.01 1.02 95740-C1000 E52',
     ],
   },
+  CAR.HYUNDAI_SONATA_LF_HYBRID: {
+    (Ecu.fwdRadar, 0x7d0, None): [
+      b'\xf1\x00LFhe SCC FNCUP      1.00 1.02 96400-E6500         ',
+    ],
+    (Ecu.fwdCamera, 0x7c4, None): [
+      b'\xf1\x00LFH MFC  AT KOR LHD 1.00 1.01 95740-E6000 171107',
+    ],
+  },
   CAR.HYUNDAI_TUCSON: {
     (Ecu.fwdRadar, 0x7d0, None): [
       b'\xf1\x00TL__ FCA F-CUP      1.00 1.01 99110-D3500         ',

@@ -1,0 +1,1870 @@
+diff --git a/docs/sonata-lf-hev-long-oncar.md b/docs/sonata-lf-hev-long-oncar.md
+new file mode 100644
+index 00000000..dcab7748
+--- /dev/null
++++ b/docs/sonata-lf-hev-long-oncar.md
+@@ -0,0 +1,48 @@
++# Sonata LF Hybrid - openpilot longitudinal on-car bring-up (personal fork)
++
++## What this fork changes
++- Moves CAR.HYUNDAI_SONATA_LF_HYBRID onto standard `hyundai` panda safety, not `hyundaiLegacy`.
++- Adds `HyundaiSafetyFlags.ALT_STANDSTILL` (1024): relaxes only WHL_SPD11 (0x386) RX integrity
++  because that message has no valid counter/checksum on this car, and derives `vehicle_moving`
++  from the integrity-valid TCS13 (0x394) `StandStill` bit.
++- Enables openpilot longitudinal availability; all actuation is the stock hyundai flag-driven path.
++
++## Build / flash (openpilot side, outside opendbc)
++1. openpilot vendors opendbc as the `opendbc_repo` submodule. Point it at this fork's
++   `sonata-lf-hev-long` branch by adding the fork remote, fetching, and checking out the branch
++   inside `opendbc_repo`.
++2. Run openpilot's build (`scons`). Panda firmware is compiled from the vendored `opendbc/safety`
++   and auto-flashed by `pandad` on the next boot when its signature changes. No manual DFU needed.
++3. Use a non-release branch: `hyundai_longitudinal` is behind `#ifdef ALLOW_DEBUG`, and the
++   "openpilot Longitudinal Control (Alpha)" toggle is hidden on release branches.
++4. Hardware: comma 3/3X plus the correct in-line Hyundai harness. It must sit between the radar and
++   the rest of the bus so panda can inject SCC12 and issue the 0x7D0 disable.
++
++## Enable at runtime
++- Toggle **openpilot Longitudinal Control (Alpha)**, param `AlphaLongitudinalEnabled`. It is visible
++  because `alphaLongitudinalAvailable` is now true for this car.
++
++## On-car checklist (in order, abort if any step fails)
++1. Engage on a safe, empty road at low speed. Confirm openpilot ACC engages, not stock cruise.
++2. **Radar disable (the key unknown):** confirm the stock radar stops transmitting SCC. There should
++   be no "SCC conditions not met" fight and no dual-SCC on the bus. If the radar refuses the 0x7D0
++   disable, openpilot ACC and factory SCC will conflict. Abort and revert; this car is not viable
++   without a working radar disable.
++3. Verify standstill: at a full stop, openpilot holds; on lead pull-away it resumes cleanly. This
++   exercises TCS13.StandStill sourcing.
++4. Verify driver override: tap the brake for immediate disengage; press the gas for override.
++5. Evaluate ride quality: jerk, stopping distance, and creep. The tune is the generic hyundai
++   longitudinal tune; harsh stops are tuning, not a safety issue.
++
++## Accepted tradeoffs / known limits
++- Factory AEB/FCW is lost while openpilot longitudinal is on because the radar is disabled. This is
++  inherent to radar-SCC openpilot longitudinal, not specific to this fork.
++- The platform intentionally does not set `MANDO_RADAR`, so openpilot longitudinal runs with
++  vision-only lead data. Expect follow distance and stop behavior to differ from stock radar SCC.
++- Longitudinal tune is not validated for this exact car; ride quality may differ from stock SCC.
++- steerRatio default is `13.27*1.15`; refine from `liveParameters.steerRatio` on a highway route.
++
++## Do not
++- Do not run on a release branch.
++- Do not open an upstream PR; this relaxes a safety check for one car.
++- Do not set MANDO_RADAR unless the radar is confirmed to keep emitting tracks after disable.
+diff --git a/docs/superpowers/plans/2026-07-10-sonata-lf-hev-long-sunnypilot-port.md b/docs/superpowers/plans/2026-07-10-sonata-lf-hev-long-sunnypilot-port.md
+new file mode 100644
+index 00000000..804c49cd
+--- /dev/null
++++ b/docs/superpowers/plans/2026-07-10-sonata-lf-hev-long-sunnypilot-port.md
+@@ -0,0 +1,480 @@
++# Sonata LF Hybrid Longitudinal — Port to sunnypilot Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans (or subagent-driven-development) to execute task-by-task. Steps use checkbox (`- [ ]`) syntax.
++
++**Goal:** Re-apply the tested "Sonata LF Hybrid openpilot longitudinal" change (from the comma-opendbc reference branch `sonata-lf-hev-long`) onto **sunnypilot's own opendbc fork**, then deploy to the on-car comma device.
++
++**Architecture:** This is a PORT, not a fresh implementation. The reference change is fully committed and offline-verified on comma-opendbc master (see companion plan `2026-07-10-sonata-lf-hev-longitudinal.md`). sunnypilot's opendbc fork diverges (MADS, ESCC/non-SCC, a separate "sp" safety-param space, and ~16 `HYUNDAI_COMMON_RX_CHECKS` call sites vs comma's 6). The semantic change is identical; only the insertion points, the call-site count, and two runtime auto-detect flags differ. A literal `git apply` of the comma-master hunks will FAIL on several files — every edit below is hand-applied and content-anchored.
++
++**Tech Stack:** Python 3.12 (opendbc car layer), C (panda safety), scons (panda firmware build), capnp/cffi (safety tests). sunnypilot vendors opendbc as its `opendbc_repo` submodule; the panda firmware is compiled FROM `opendbc/safety` on the device.
++
++## Global Constraints
++
++- **Personal fork; NOT for upstream.** Do not open a PR against sunnypilot or commaai.
++- **Two working trees:** do all edits + offline verification in the local sunnypilot opendbc clone at `/Users/mark.yeon/Documents/work/oss/sunny_opendbc` (referred to as `$SP`), then deploy the same commits to the device's `opendbc_repo`. Do NOT edit the comma-opendbc repo at `/Users/mark.yeon/Documents/work/oss/opendbc` — that is the read-only reference source.
++- **Reference diff = source of truth.** The exact committed change is on the comma reference branch; view it with:
++  `git -C /Users/mark.yeon/Documents/work/oss/opendbc diff master...sonata-lf-hev-long -- <path>`
++  Port the *semantics* of that diff, adapted to sunnypilot's structure per each task below.
++- **Flag value 1024 is the python↔C contract.** `HyundaiSafetyFlags.ALT_STANDSTILL = 1024` (values.py) and `HYUNDAI_PARAM_ALT_STANDSTILL = 1024` (hyundai_common.h). It lives ONLY in the MAIN `HyundaiSafetyFlags`/`param` space — NEVER in sunnypilot's `HyundaiSafetyFlagsSP` / `current_safety_param_sp`.
++- **0x394 (TCS13) stays strict; only 0x386 (WHL_SPD11) is relaxed.** The 2-param macro split is mandatory.
++- **ALLOW_DEBUG:** sunnypilot's panda is always a DEBUG build (no release cert), so `hyundai_longitudinal` is un-gated — this port depends on that and it is already satisfied.
++- **StandStill polarity is verified** (owner route): bit 47 == 1 = stopped → `vehicle_moving = !GET_BIT(msg, 47U)`.
++- **Line numbers below are from sunnypilot opendbc commit `b9712d2`** (device pin). Treat them as anchors; if drifted, match by the quoted content.
++
++## Route-Verified Facts That De-Risk the Port (ground truth — do not re-derive)
++
++Confirmed by replaying the owner's route (`9f9b411a57b8ce21/00000001--d6d081f0e7`) locally:
++
++| Fact | Consequence for the port |
++|---|---|
++| `0x2AB` (ESCC_MSG) **ABSENT** on bus 0 | sunnypilot ENHANCED_SCC will NOT auto-trigger → safety config matches the tested comma-master path. Do not add 0x2AB to the fingerprint. |
++| `0x391` (LDA button) **ABSENT** on bus 0 | `HAS_LDA_BUTTON` stays false → longitudinal branch takes the non-lda `hyundai_long_rx_checks` path → a **single** alt_standstill array suffices (no lda-button variant needed). |
++| `0x420` SCC11 + `0x421` SCC12 **PRESENT** on bus 0 | the non-long radar-SCC RX arrays' `SCC11_ADDR_CHECK(0)`+`SCC12_ADDR_CHECK(0)` are satisfied → the ported non-long alt_standstill array must include BOTH. |
++| `0x386` no valid counter/checksum; `0x394` valid (brake+StandStill); `0x421` checksum valid; `0x371` gas live; `0x38d` absent (USE_FCA off) | unchanged from the main plan; all confirmed. |
++
++## Sunnypilot Divergences (the whole reason this is a separate port plan)
++
++1. **~16 `HYUNDAI_COMMON_RX_CHECKS(...)` call sites** in `hyundai.h` (comma has 6): the 2-param refactor must touch every one.
++2. **Longitudinal branch has a 2-D selection** (fcev × has_lda_button = 4 arrays, `hyundai.h:349-361`) vs comma's 2. Insert the alt_standstill selection as the **outermost first** condition so it wins regardless (safe because LDA is absent for this car).
++3. **Non-long radar-SCC arrays carry `SCC12_ADDR_CHECK(0)` AND `SCC11_ADDR_CHECK(0)`** (`hyundai.h:382-383`); comma's had SCC12 only.
++4. **`interface.py` has a second method `_get_params_sp`** owning `ret.safetyParam` (the SP space). The ALT_STANDSTILL OR-in goes in `_get_params` on `safetyConfigs[-1].safetyParam` — NOT there.
++5. **`values.py` STEER_MAX tuple and `test_hyundai.py` no_eps set are wrapped differently** → literal patch fails, hand-edit.
++6. **`carcontroller.py`/`carstate.py` import MADS modules** → not byte-identical to comma, but still need ZERO change for this flag-driven port.
++7. sunnypilot extra globals (`hyundai_escc`, `hyundai_non_scc`, `hyundai_longitudinal_main_cruise_toggleable`, `hyundai_has_lda_button`) come from the SP param space; none interact with our MAIN-param flag as long as the car uses `HyundaiPlatformConfig` (not `HyundaiNonSccPlatformConfig`) and its fingerprint omits 0x2AB.
++
++## File Structure (in `$SP`)
++
++- `opendbc/car/hyundai/values.py` — `ALT_STANDSTILL` flag; `CAR.HYUNDAI_SONATA_LF_HYBRID`; STEER_MAX bucket.
++- `opendbc/car/hyundai/interface.py` — ALT_STANDSTILL OR-in in `_get_params`.
++- `opendbc/car/hyundai/fingerprints.py`, `opendbc/car/torque_data/substitute.toml`, `opendbc/car/tests/routes.py`, `opendbc/car/hyundai/tests/test_hyundai.py` — platform registration.
++- `opendbc/safety/modes/hyundai_common.h` — param decode + global bool.
++- `opendbc/safety/modes/hyundai.h` — 2-param macro (16 call sites); alt_standstill arrays in BOTH long and non-long branches; vehicle_moving from TCS13.
++- `opendbc/safety/tests/test_hyundai.py` — new test class.
++- `opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py` — offline replay (copy from reference, fix import paths if needed).
++
++---
++
++### Task 0: Set up the sunnypilot working branch
++
++**Files:** none (git setup)
++
++- [ ] **Step 1: Branch off the device-pinned commit**
++
++```bash
++cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
++git status                      # confirm clean
++git rev-parse HEAD              # note the base commit (should be the device pin, e.g. b9712d2 area)
++git checkout -b sonata-lf-hev-long-sp
++```
++
++- [ ] **Step 2: Prime the env**
++
++```bash
++cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
++source setup.sh                 # uv sync + activate .venv (sunnypilot ships this)
++```
++Expected: venv active, no error. If `setup.sh` differs, use `uv run` prefixes as in later steps.
++
++---
++
++### Task 1: Add `ALT_STANDSTILL` flag (Python) + confirm it is free
++
++**Files:**
++- Modify: `$SP/opendbc/car/hyundai/values.py` (`HyundaiSafetyFlags`, after `ALT_LIMITS_2 = 512`)
++
++**Interfaces:**
++- Produces: `HyundaiSafetyFlags.ALT_STANDSTILL = 1024`.
++
++- [ ] **Step 1: Confirm 1024 is free in sunnypilot's MAIN enum**
++
++```bash
++cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
++rg -n "class HyundaiSafetyFlags" -A 14 opendbc/car/hyundai/values.py
++```
++Expected: enum ends at `ALT_LIMITS_2 = 512` (identical to comma). If a fork delta already uses 1024 here, STOP and report — pick the next free bit and keep python/C in lockstep.
++
++- [ ] **Step 2: Add the member**
++
++After `ALT_LIMITS_2 = 512` in `HyundaiSafetyFlags`:
++
++```python
++  ALT_LIMITS_2 = 512
++  # Personal fork (Sonata LF Hybrid): car runs standard 'hyundai' safety but WHL_SPD11 (0x386)
++  # has no valid counter/checksum. This bit tells the panda safety RX check to skip 0x386 integrity
++  # (that message only) and derive vehicle_moving from TCS13 (0x394) StandStill instead.
++  # Value MUST match HYUNDAI_PARAM_ALT_STANDSTILL in opendbc/safety/modes/hyundai_common.h.
++  ALT_STANDSTILL = 1024
++```
++
++- [ ] **Step 3: Verify**
++
++```bash
++python -c "from opendbc.car.hyundai.values import HyundaiSafetyFlags as F; \
++assert F.ALT_STANDSTILL.value==1024; \
++assert len([f.value for f in F])==len({f.value for f in F}); print('OK 1024 free')"
++```
++Expected: `OK 1024 free`
++
++- [ ] **Step 4: Commit** — `git add opendbc/car/hyundai/values.py && git commit -m "hyundai: add ALT_STANDSTILL safety flag (sunnypilot port)"`
++
++---
++
++### Task 2: Decode the flag in panda safety (`hyundai_common.h`)
++
++**Files:**
++- Modify: `$SP/opendbc/safety/modes/hyundai_common.h`
++
++**Interfaces:**
++- Produces: C global `hyundai_alt_standstill`; `HYUNDAI_PARAM_ALT_STANDSTILL = 1024`.
++
++- [ ] **Step 1: Add the global** — after `bool hyundai_alt_limits_2 = false;` (~L50):
++
++```c
++extern bool hyundai_alt_limits_2;
++bool hyundai_alt_limits_2 = false;
++
++extern bool hyundai_alt_standstill;
++bool hyundai_alt_standstill = false;
++```
++
++- [ ] **Step 2: Add the param const** — inside `hyundai_common_init`, after `const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;` (~L79):
++
++```c
++  const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;
++  const uint16_t HYUNDAI_PARAM_ALT_STANDSTILL = 1024;
++```
++
++- [ ] **Step 3: Add the decode** — after `hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);` (~L87):
++
++```c
++  hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);
++  hyundai_alt_standstill = GET_FLAG(param, HYUNDAI_PARAM_ALT_STANDSTILL);
++```
++
++> Do NOT touch the SP param block (`hyundai_escc = GET_FLAG(current_safety_param_sp, ...)`). ALT_STANDSTILL is a MAIN-param flag.
++
++- [ ] **Step 4: Verify it compiles** (covered by Task 4 build). No standalone commit yet — commit with Task 3 since the two safety files build together. (Or commit now; either is fine.)
++
++---
++
++### Task 3: Panda safety `hyundai.h` — 2-param macro (16 sites) + alt_standstill arrays + vehicle_moving
++
++**Files:**
++- Modify: `$SP/opendbc/safety/modes/hyundai.h`
++- Test: `$SP/opendbc/safety/tests/test_hyundai.py` (Task 5)
++
++**Interfaces:**
++- Consumes: `HYUNDAI_COMMON_RX_CHECKS`, `hyundai_alt_standstill` (Task 2), `GET_BIT` (declarations.h:38, verified present).
++- Produces: relaxed-0x386 RX behavior + TCS13 standstill under the flag.
++
++- [ ] **Step 1: 2-param macro** — at the `#define HYUNDAI_COMMON_RX_CHECKS(legacy)` (~L41):
++
++Change the signature and the 0x386 / 0x394 lines:
++```c
++#define HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)                  \
++  ...
++  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (whl_legacy), .ignore_counter = (whl_legacy), .max_counter = (whl_legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
++  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (tcs13_legacy), .ignore_counter = (tcs13_legacy), .max_counter = (tcs13_legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
++  ...
++```
++(0x260/0x371/0x251/0x4F1 lines unchanged.)
++
++- [ ] **Step 2: Update ALL 16 call sites**
++
++```bash
++cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
++grep -n "HYUNDAI_COMMON_RX_CHECKS(" opendbc/safety/modes/hyundai.h
++```
++Expected: the macro def + 16 calls. Edit each call:
++- The **legacy-mode** array (`hyundai_legacy_rx_checks`, ~L480): `HYUNDAI_COMMON_RX_CHECKS(true)` → `HYUNDAI_COMMON_RX_CHECKS(true, true)`.
++- **Every other** call (the ~15 sites at approx L330, L334, L339, L344, L372, L381, L387, L394, L401, L409, L413, L418, L423, L429, L434): `HYUNDAI_COMMON_RX_CHECKS(false)` → `HYUNDAI_COMMON_RX_CHECKS(false, false)`.
++
++Then confirm none remain single-arg:
++```bash
++grep -nE "HYUNDAI_COMMON_RX_CHECKS\((true|false)\)" opendbc/safety/modes/hyundai.h || echo "all two-arg"
++```
++Expected: `all two-arg`
++
++- [ ] **Step 3: Longitudinal-branch alt_standstill array + selection**
++
++In `hyundai_init`, `if (hyundai_longitudinal)` block. The array `hyundai_long_rx_checks` is declared near L329-331; the selection is the if/else at ~L349-361:
++```c
++    if (hyundai_fcev_gas_signal) {
++      if (hyundai_has_lda_button) { SET_RX_CHECKS(hyundai_fcev_lda_button_long_rx_checks, ret); }
++      else { SET_RX_CHECKS(hyundai_fcev_long_rx_checks, ret); }
++    } else {
++      if (hyundai_has_lda_button) { SET_RX_CHECKS(hyundai_lda_button_long_rx_checks, ret); }
++      else { SET_RX_CHECKS(hyundai_long_rx_checks, ret); }
++    }
++```
++Add the array next to `hyundai_long_rx_checks`:
++```c
++    // Personal fork (Sonata LF Hybrid): WHL_SPD11 (0x386) has no valid counter/checksum on this
++    // car. Relax 0x386 integrity ONLY (0x394/TCS13 stays strict); vehicle_moving comes from TCS13.
++    static RxCheck hyundai_long_alt_standstill_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(true, false)
++    };
++```
++And make `if (hyundai_alt_standstill)` the OUTERMOST first condition of that selection (it wins over fcev/lda; safe because LDA is absent for this car):
++```c
++    if (hyundai_alt_standstill) {
++      SET_RX_CHECKS(hyundai_long_alt_standstill_rx_checks, ret);
++    } else if (hyundai_fcev_gas_signal) {
++      ...existing fcev/lda nesting unchanged...
++    } else {
++      ...existing lda nesting unchanged...
++    }
++```
++
++- [ ] **Step 4: Non-long radar-SCC alt_standstill array + selection**
++
++In the non-long `else` branch (the default radar-SCC path, `hyundai_rx_checks` declared ~L381 with `HYUNDAI_SCC12_ADDR_CHECK(0)` + `HYUNDAI_SCC11_ADDR_CHECK(0)`). Add a sibling array that mirrors it exactly but with relaxed 0x386:
++```c
++    // ALT_STANDSTILL is per-platform, not per-longitudinal-control. Keep lateral-only mode usable
++    // when Alpha Long is off by relaxing only WHL_SPD11 (0x386); SCC11/SCC12 and TCS13 stay strict.
++    static RxCheck hyundai_alt_standstill_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(true, false)
++      HYUNDAI_SCC12_ADDR_CHECK(0)
++      HYUNDAI_SCC11_ADDR_CHECK(0)
++    };
++```
++(Match the exact addr-check lines present in the sibling `hyundai_rx_checks` — copy them verbatim; if sunnypilot's default array has only SCC12, include only SCC12. Route confirms SCC11 present, so both is correct if the sibling has both.)
++Make `if (hyundai_alt_standstill)` the outermost first condition of the non-long radar-SCC selection, ahead of the fcev/lda/non_scc nesting.
++
++- [ ] **Step 5: vehicle_moving from TCS13 in `hyundai_rx_hook`** (~L191-199)
++
++```c
++    // sample wheel speed, averaging opposite corners
++    if ((msg->addr == 0x386U) && !hyundai_alt_standstill) {
++      uint32_t front_left_speed = GET_BYTES(msg, 0, 2) & 0x3FFFU;
++      uint32_t rear_right_speed = GET_BYTES(msg, 6, 2) & 0x3FFFU;
++      vehicle_moving = (front_left_speed > HYUNDAI_STANDSTILL_THRSLD) || (rear_right_speed > HYUNDAI_STANDSTILL_THRSLD);
++    }
++
++    if (msg->addr == 0x394U) {
++      brake_pressed = ((msg->data[5] >> 5U) & 0x3U) == 0x2U;
++      // Personal fork (Sonata LF Hybrid): 0x386 lacks integrity; TCS13.StandStill (bit 47) is the
++      // integrity-valid standstill source. StandStill == 1 means stopped (verified on owner route).
++      if (hyundai_alt_standstill) {
++        vehicle_moving = !GET_BIT(msg, 47U);
++      }
++    }
++```
++
++- [ ] **Step 6: Build the safety** — proves the macro refactor + new arrays compile:
++
++```bash
++cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc && scons -j8 opendbc/safety
++```
++Expected: clean compile. A compile error = a missed/miswrapped call site (Step 2) or a wrong addr-check macro name (Step 4) — fix and rebuild.
++
++- [ ] **Step 7: Regression — existing hyundai safety tests still pass**
++
++```bash
++python -m unittest opendbc.safety.tests.test_hyundai -v
++```
++Expected: same count as before, all `ok`.
++
++- [ ] **Step 8: Commit** — `git add opendbc/safety/modes/hyundai.h opendbc/safety/modes/hyundai_common.h && git commit -m "hyundai/safety: ALT_STANDSTILL — relax 0x386, standstill from TCS13 (sunnypilot port)"`
++
++---
++
++### Task 4: Register the platform + wire the safety param (Python)
++
++**Files:**
++- Modify: `$SP/opendbc/car/hyundai/values.py`, `interface.py`, `fingerprints.py`, `torque_data/substitute.toml`, `tests/routes.py`, `hyundai/tests/test_hyundai.py`
++
++- [ ] **Step 1: Platform config (values.py)** — after the `HYUNDAI_SONATA_LF` entry:
++
++```python
++  # Personal fork: LF Hybrid on standard 'hyundai' safety with openpilot longitudinal.
++  # Flags = HYBRID only: NO LEGACY, NO UNSUPPORTED_LONGITUDINAL, NO TCU_GEARS (hybrid uses ELECT_GEAR).
++  # 0x386 integrity relaxed via HyundaiSafetyFlags.ALT_STANDSTILL set in interface.py.
++  # steerRatio 13.27*1.15 mirrors the ICE LF (route-supported); mass ~1595 kg, owner-refinable.
++  HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
++    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
++    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
++    flags=HyundaiFlags.HYBRID,
++  )
++```
++First confirm `CAR.HYUNDAI_SONATA_LF` exists as the specs reference and `CAR.HYUNDAI_SONATA_LF_HYBRID` does not already exist:
++```bash
++rg -n "HYUNDAI_SONATA_LF\b|HYUNDAI_SONATA_LF_HYBRID" opendbc/car/hyundai/values.py
++```
++
++- [ ] **Step 2: STEER_MAX bucket (values.py) — HAND-EDIT (wrapping differs from comma)**
++
++Add `CAR.HYUNDAI_SONATA_LF_HYBRID` to the `self.STEER_MAX = 255` tuple in place, right after `CAR.HYUNDAI_SONATA_LF`. Do not paste comma's reflowed hunk; insert the token into sunnypilot's existing line layout.
++
++- [ ] **Step 3: Safety param OR-in (interface.py) — in `_get_params`, NOT `_get_params_sp`**
++
++After the `if candidate == CAR.KIA_OPTIMA_G4_FL:` override:
++```python
++    if candidate == CAR.KIA_OPTIMA_G4_FL:
++      ret.steerActuatorDelay = 0.2
++
++    # Personal fork: LF Hybrid runs standard 'hyundai' safety but WHL_SPD11 (0x386) lacks a valid
++    # counter/checksum. Skip 0x386 integrity and use TCS13 (0x394) StandStill for vehicle_moving.
++    if candidate == CAR.HYUNDAI_SONATA_LF_HYBRID:
++      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_STANDSTILL.value
++```
++> CRITICAL: target `ret.safetyConfigs[-1].safetyParam` (MAIN param, same idiom as the LONG/HYBRID_GAS OR-ins). NOT `ret.safetyParam` in `_get_params_sp` (that is the SP space where 1024 has no meaning → car would fault 0x386 and never engage).
++
++- [ ] **Step 4: Fingerprint (fingerprints.py)** — add to `FW_VERSIONS` (match sunnypilot's `Ecu` import + dict shape):
++
++```python
++  CAR.HYUNDAI_SONATA_LF_HYBRID: {
++    (Ecu.fwdRadar, 0x7d0, None): [
++      b'\xf1\x00LFhe SCC FNCUP      1.00 1.02 96400-E6500         ',
++    ],
++    (Ecu.fwdCamera, 0x7c4, None): [
++      b'\xf1\x00LFH MFC  AT KOR LHD 1.00 1.01 95740-E6000 171107',
++    ],
++  },
++```
++> Do NOT add `0x2AB` (ESCC) or `0x391` (LDA) anywhere — both verified absent; adding them would trip sunnypilot auto-flags.
++
++- [ ] **Step 5: Torque substitution (substitute.toml)** — `"HYUNDAI_SONATA_LF_HYBRID" = "HYUNDAI_SONATA_LF"`
++
++- [ ] **Step 6: Test route (opendbc/car/tests/routes.py)** — uses `HYUNDAI.` alias:
++```python
++  CarTestRoute("9f9b411a57b8ce21/00000001--d6d081f0e7", HYUNDAI.HYUNDAI_SONATA_LF_HYBRID),
++```
++
++- [ ] **Step 7: EPS exclusion (hyundai/tests/test_hyundai.py) — HAND-EDIT (set wrapping differs)** — add `CAR.HYUNDAI_SONATA_LF_HYBRID` to the `no_eps_platforms` set literal in place.
++
++- [ ] **Step 8: Verify CarParams**
++
++```bash
++python -c "
++from opendbc.car.hyundai.values import CAR, HyundaiSafetyFlags
++from opendbc.car.hyundai.interface import CarInterface
++from opendbc.car import structs, gen_empty_fingerprint
++CP = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, gen_empty_fingerprint(), [], alpha_long=True, is_release=False, docs=False)
++assert CP.openpilotLongitudinalControl
++assert CP.safetyConfigs[-1].safetyModel == structs.CarParams.SafetyModel.hyundai
++p = CP.safetyConfigs[-1].safetyParam
++for f in (HyundaiSafetyFlags.LONG, HyundaiSafetyFlags.HYBRID_GAS, HyundaiSafetyFlags.ALT_STANDSTILL):
++    assert p & f.value, f.name
++print('OK: hyundai safety, long ON, ALT_STANDSTILL set')
++"
++```
++Expected: `OK: hyundai safety, long ON, ALT_STANDSTILL set`
++(If `get_params` signature differs in sunnypilot, match `opendbc/car/tests/test_models.py`. If `_get_params_sp` unexpectedly flipped ESCC/NON_SCC on with an empty fingerprint, re-check Step 4.)
++
++- [ ] **Step 9: Car tests + zero-diff proof**
++
++```bash
++python -m pytest opendbc/car/hyundai/tests/test_hyundai.py -q
++git diff --stat opendbc/car/hyundai/carcontroller.py opendbc/car/hyundai/hyundaican.py opendbc/car/hyundai/carstate.py
++```
++Expected: car tests pass; zero diff on the three actuation files.
++
++- [ ] **Step 10: Commit** — `git add opendbc/car/hyundai/values.py opendbc/car/hyundai/interface.py opendbc/car/hyundai/fingerprints.py opendbc/car/torque_data/substitute.toml opendbc/car/tests/routes.py opendbc/car/hyundai/tests/test_hyundai.py && git commit -m "hyundai: register Sonata LF Hybrid with openpilot longitudinal (sunnypilot port)"`
++
++---
++
++### Task 5: Safety unit test for the ALT_STANDSTILL path
++
++**Files:**
++- Modify: `$SP/opendbc/safety/tests/test_hyundai.py`
++
++- [ ] **Step 1: Confirm the base class + helpers exist in sunnypilot**
++
++```bash
++rg -n "class TestHyundaiLongitudinalSafety\b|CANPackerSafety|libsafety_py|HyundaiSafetyFlags" opendbc/safety/tests/test_hyundai.py | head
++```
++Expected: `TestHyundaiLongitudinalSafety`, `CANPackerSafety`, `libsafety_py`, `HyundaiSafetyFlags` all present (sunnypilot mirrors comma here).
++
++- [ ] **Step 2: Append the test class** — copy the `TestHyundaiLongitudinalSafetyAltStandstill` class verbatim from the reference branch:
++```bash
++git -C /Users/mark.yeon/Documents/work/oss/opendbc show sonata-lf-hev-long:opendbc/safety/tests/test_hyundai.py \
++  | sed -n '/class TestHyundaiLongitudinalSafetyAltStandstill/,/^$/p'
++```
++Paste it before `if __name__` in `$SP/opendbc/safety/tests/test_hyundai.py`. It sets `HyundaiSafetyFlags.LONG | HYBRID_GAS | ALT_STANDSTILL`, overrides `_user_gas_msg` (E_EMS11), `_user_brake_msg`/`_vehicle_moving_msg` (TCS13), and asserts: 0x386 bad-integrity does not drop controls; TCS13 bad checksum IS rejected; vehicle_moving tracks TCS13.StandStill.
++
++- [ ] **Step 3: Run the new class**
++
++```bash
++scons -j8 opendbc/safety && python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiLongitudinalSafetyAltStandstill -v
++```
++Expected: all `ok`. If `set_safety_hooks` errors, ALT_STANDSTILL isn't decoded → recheck Tasks 2-3.
++
++- [ ] **Step 4: Full safety suite + coverage gate**
++
++```bash
++python -m unittest opendbc.safety.tests.test_hyundai -v && ./opendbc/safety/tests/test.sh
++```
++Expected: all pass; `test.sh` MISRA + 100% coverage passes. (If sunnypilot's `test.sh` differs, run its documented safety-test entrypoint; ensure the new C branches are covered.)
++
++- [ ] **Step 5: Commit** — `git add opendbc/safety/tests/test_hyundai.py && git commit -m "hyundai/safety: test ALT_STANDSTILL path (sunnypilot port)"`
++
++---
++
++### Task 6: Offline replay against the owner route (in sunnypilot tree)
++
++**Files:**
++- Create: `$SP/opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py`
++
++- [ ] **Step 1: Copy the reference replay script**
++
++```bash
++git -C /Users/mark.yeon/Documents/work/oss/opendbc show \
++  sonata-lf-hev-long:opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py \
++  > /Users/mark.yeon/Documents/work/oss/sunny_opendbc/opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
++```
++It reads the 3 local rlog segments, builds the interface with `alpha_long=True`, asserts CarParams (hyundai safety, long ON, LONG|HYBRID_GAS|ALT_STANDSTILL) + parses CarState + re-asserts StandStill polarity.
++
++- [ ] **Step 2: Run it**
++
++```bash
++cd /Users/mark.yeon/Documents/work/oss/sunny_opendbc
++uv run --with zstandard python opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
++```
++Expected: ends `ALL OFFLINE CHECKS PASSED`. If `get_params`/`interfaces` import differs in sunnypilot, adjust the two import lines to match sunnypilot's `car_helpers` API (behavior identical).
++
++- [ ] **Step 3: Commit** — `git add opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py && git commit -m "hyundai: offline replay for Sonata LF Hybrid long (sunnypilot port)"`
++
++---
++
++### Task 7: Deploy to the on-car comma device
++
++**Files:** none in-repo (device operations)
++
++**Why it is not source-edit-only:** the Python changes load live, but the panda safety C changes are compiled into the panda firmware and must be recompiled + reflashed. sunnypilot's panda is already an ALLOW_DEBUG build (no release cert), and its firmware is compiled FROM `opendbc/safety` (repo-root symlink `opendbc` → `opendbc_repo/opendbc`), so these edits do land — after a rebuild.
++
++- [ ] **Step 1: Get the branch onto the device's `opendbc_repo`**
++
++Push `sonata-lf-hev-long-sp` to your sunnypilot-opendbc fork remote, SSH to the device (`ssh comma@<device-ip>`), and in `openpilot/opendbc_repo` fetch + checkout that branch. (Or rsync the working tree into `opendbc_repo`.) Confirm the symlink resolves: `readlink openpilot/opendbc` → `opendbc_repo/opendbc`.
++
++- [ ] **Step 2: Rebuild on device (recompiles panda firmware)**
++
++In the openpilot dir on the device, run the build (`scons`, or let `system/manager/build.py` run it on boot). This regenerates `panda/board/obj/panda_h7.bin.signed`.
++
++- [ ] **Step 3: Reboot → auto-reflash → VERIFY**
++
++Reboot. `pandad` detects the firmware signature mismatch and reflashes. **Verify the panda actually took new firmware** (pandad logs / panda firmware git hash). If unchanged, the safety still rejects 0x386 → the car will not engage.
++
++- [ ] **Step 4: Enable Alpha Longitudinal**
++
++In sunnypilot settings, enable the alpha/openpilot longitudinal toggle for this car (`alphaLongitudinalAvailable` is now True).
++
++- [ ] **Step 5: Staged on-car verification (safety-critical)**
++
++Follow `docs/sonata-lf-hev-long-oncar.md` from the reference repo:
++1. Empty road, low speed; confirm openpilot ACC engages (not stock cruise).
++2. **★ Radar 0x7D0 disable — the only offline-unverifiable gate:** confirm the stock radar stops SCC (no "SCC conditions not met" fight, no dual SCC). If it refuses → ABORT/revert; the car is not viable without it.
++3. Standstill hold + resume (TCS13 StandStill path). 4. Driver override (brake→disengage, gas→override). 5. Ride quality.
++
++> Factory AEB is OFF while engaged (radar disabled). Empty road, foot ready to brake, instant-disengage posture.
++
++---
++
++## Self-Review
++
++- **Semantic parity with reference:** Tasks 1-6 reproduce every hunk of the committed comma-master diff (verified: values.py, interface.py, fingerprints.py, substitute.toml, routes.py, test_hyundai.py, hyundai_common.h, hyundai.h — including the alt_standstill array in BOTH the long and non-long branches, and vehicle_moving from TCS13).
++- **Divergences handled:** 16 call sites (Task 3 Step 2); 2-D long selection with outermost alt_standstill (Step 3); non-long SCC11+SCC12 (Step 4); `_get_params` not `_get_params_sp` (Task 4 Step 3); hand-edit STEER_MAX + no_eps (Task 4 Steps 2, 7); routes.py alias/path (Step 6).
++- **Runtime auto-flags neutralized:** 0x2AB and 0x391 verified absent → no ESCC/LDA divergence; fingerprint deliberately omits them; `HyundaiPlatformConfig` keeps NON_SCC dormant.
++- **Placeholder scan:** none — every code step is concrete; commands have expected output; the two lines that "copy from reference" give the exact `git show` to fetch verbatim text.
++- **Name/value consistency:** `ALT_STANDSTILL` / `1024` identical in values.py (Task 1), hyundai_common.h (Task 2), interface.py OR-in (Task 4), test (Task 5). Macro `HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)` defined Task 3 Step 1, all 16 sites updated Step 2.
++- **Owner-refinable, non-blocking:** hybrid `mass`; final `steerRatio` from a highway `liveParameters` capture; whether to ever set MANDO_RADAR (default off).
+diff --git a/docs/superpowers/plans/2026-07-10-sonata-lf-hev-longitudinal.md b/docs/superpowers/plans/2026-07-10-sonata-lf-hev-longitudinal.md
+new file mode 100644
+index 00000000..52434b6d
+--- /dev/null
++++ b/docs/superpowers/plans/2026-07-10-sonata-lf-hev-longitudinal.md
+@@ -0,0 +1,829 @@
++# Sonata LF Hybrid — openpilot Longitudinal (personal fork) Implementation Plan
++
++> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
++
++**Goal:** Enable openpilot longitudinal (ACC: openpilot controls gas/brake) for the Hyundai Sonata LF Hybrid 2018-19 in a personal opendbc fork, by moving the car onto the standard `hyundai` panda safety mode with a new per-car flag that exempts its integrity-less wheel-speed message from RX checks and sources standstill from an integrity-valid message instead.
++
++**Architecture:** The car is genuinely legacy-class — its WHL_SPD11 (0x386) carries no valid alive-counter or checksum, which is why upstream keeps it on `hyundaiLegacy` safety (which forbids longitudinal). We instead route it to standard `hyundai` safety (which supports longitudinal + has the 0x7D0 radar-disable TX allowlist) and add one new `HyundaiSafetyFlags` bit, `ALT_STANDSTILL` (value 1024), that does exactly two things when set: (1) relaxes only 0x386's RX integrity check while keeping every other message strict, and (2) derives the safety `vehicle_moving` global from TCS13 (0x394) `StandStill` — an integrity-valid message — instead of 0x386 wheel speeds. All longitudinal actuation (SCC12 accel TX, 0x7D0 radar disable, FCA/AEB blocking, hybrid gas/cruise/standstill carstate) is already flag-driven and needs no code change once the car's flags are correct.
++
++**Tech Stack:** Python 3.12 (opendbc car layer), C (panda safety in `opendbc/safety`, compiled to a `libsafety` shared object for unit tests), `uv` for env, `scons` for the safety/panda build, capnp/cffi for tests. openpilot (separate repo) vendors this opendbc via its `opendbc_repo` submodule.
++
++## Global Constraints
++
++- **Personal fork only — NOT for upstream merge.** The change deliberately relaxes a safety integrity check for one car; upstream would reject it. Do not open a PR against commaai/opendbc.
++- **Panda must be a non-release / `ALLOW_DEBUG` build.** `hyundai_longitudinal` is gated behind `#ifdef ALLOW_DEBUG` in `hyundai_common.h`; release builds force it `false`. This is the same gate that makes openpilot's "openpilot Longitudinal Control (Alpha)" UI toggle visible, so a non-release openpilot branch satisfies both.
++- **Flag value `1024` is the load-bearing python↔C contract.** `HyundaiSafetyFlags.ALT_STANDSTILL = 1024` (python) and `HYUNDAI_PARAM_ALT_STANDSTILL = 1024` (C) MUST be identical. Use the name `ALT_STANDSTILL` on both sides.
++- **Do NOT weaken 0x386 globally.** The relaxation must be gated by the new per-car flag only. **0x394 (TCS13) must remain fully integrity-checked** — it is the valid source of both `brake_pressed` and `StandStill`.
++- **StandStill polarity is verified** from the owner's route (`9f9b411a57b8ce21/00000001--d6d081f0e7`): bit 47 == 1 means stopped (98.2% at v<0.3 km/h), == 0 means moving (100% at v>5 km/h). Therefore `vehicle_moving = !GET_BIT(msg, 47U)`.
++- **100% C line coverage gate.** `opendbc/safety/tests/test.sh` runs `gcovr --fail-under-line=100`. Every new C branch must be exercised by a test.
++- **Accepted tradeoff:** factory AEB/FCW is lost when the radar is disabled (this is a radar-SCC car; unavoidable for openpilot longitudinal on this architecture, not specific to this fork).
++- **Runtime unknown, out of plan scope (document, do not attempt to automate):** whether the car's radar accepts the 0x7D0 communication-control disable. Only verifiable on-car.
++
++## Verified Route Facts (ground truth — do not re-derive)
++
++Empirically confirmed by replaying the owner's route through `opendbc.car.logreader.LogReader` + `opendbc.can.parser.CANParser`:
++
++| Fact | Evidence |
++|---|---|
++| 0x386 WHL_SPD11 lacks integrity | alive-counter frozen at 0 across 9064 bus-0 frames; checksum match 2.4% (coincidental) |
++| 0x394 TCS13 has integrity | counter cycles 0–7; checksum 100%; carries `DriverOverride` (bits 45-46) + `StandStill` (bit 47) |
++| 0x421 SCC12 has integrity | counter + 100% checksum; openpilot's computed SCC12 checksum matches → powertrain will accept openpilot accel |
++| All non-legacy RX slots satisfiable | slot (0x260 OR 0x371): 0x371 present (hybrid gas); 0x251, 0x4F1, 0x394, 0x421 all present on bus 0. 0x260 absent (fine, OR'd). |
++| StandStill polarity | ==1 stopped 98.2% (v<0.3), ==0 moving 100% (v>5) → `vehicle_moving = !bit47` |
++| Radar outputs tracks | 0x500–0x535 present → MANDO_RADAR technically viable (optional; see Task 4 note) |
++| Hybrid gas live | E_EMS11 (0x371) `CR_Vcu_AccPedDep_Pos` has 95 distinct values, 4773 nonzero frames → driver override works |
++| 0x38d absent | → `USE_FCA` stays off → AEB-disable goes via SCC12 path (auto-handled) |
++| steerRatio | kinematic estimate ~15.6 (low speed) rising to ~18 (understeer at higher speed); default `13.27 * 1.15 = 15.26`, owner may refine from `liveParameters.steerRatio` on a highway route |
++
++## Prerequisites (one-time, not a task)
++
++- Branch `sonata-lf-hev-long` already created off `master`.
++- openpilot dev environment with this opendbc fork checked out into openpilot's `opendbc_repo` submodule (for on-car; not needed for the offline tasks below).
++- The owner's three route segments present locally:
++  - `/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--0--rlog.zst`
++  - `.../--2--rlog.zst`
++  - `.../--3--rlog.zst`
++- opendbc test env: from repo root run `source setup.sh` once (runs `uv sync --all-extras --all-groups`, activates `.venv`). All commands below assume this env (or prefix with `uv run --with zstandard`).
++
++## File Structure
++
++**opendbc car layer (Python):**
++- `opendbc/car/hyundai/values.py` — add `HyundaiSafetyFlags.ALT_STANDSTILL`; add `CAR.HYUNDAI_SONATA_LF_HYBRID` platform; add it to the `STEER_MAX = 255` bucket.
++- `opendbc/car/hyundai/interface.py` — OR `ALT_STANDSTILL` into `safetyParam` for this car (LOAD-BEARING).
++- `opendbc/car/hyundai/fingerprints.py` — `FW_VERSIONS` entry (radar + camera FW).
++- `opendbc/car/torque_data/substitute.toml` — map torque data to `HYUNDAI_SONATA_LF`.
++- `opendbc/car/tests/routes.py` — add the owner's test route.
++- `opendbc/car/hyundai/tests/test_hyundai.py` — add car to `no_eps_platforms`.
++
++**panda safety (C):**
++- `opendbc/safety/modes/hyundai_common.h` — decode the new param bit into a new global bool.
++- `opendbc/safety/modes/hyundai.h` — 2-param `HYUNDAI_COMMON_RX_CHECKS` macro; new relaxed long RX-check array; `vehicle_moving` from TCS13.
++- `opendbc/safety/tests/test_hyundai.py` — new test class `TestHyundaiLongitudinalSafetyAltStandstill`.
++
++**validation + docs:**
++- `opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py` — new self-contained offline replay against local route.
++- `docs/superpowers/plans/2026-07-10-sonata-lf-hev-longitudinal.md` — this plan.
++- `docs/sonata-lf-hev-long-oncar.md` — on-car bring-up checklist + tradeoffs.
++
++---
++
++### Task 1: Add the `ALT_STANDSTILL` safety flag (Python side)
++
++**Files:**
++- Modify: `opendbc/car/hyundai/values.py` (`HyundaiSafetyFlags` class, after `ALT_LIMITS_2 = 512`)
++- Test: `opendbc/car/hyundai/tests/test_hyundai.py` (existing suite must still pass)
++
++**Interfaces:**
++- Produces: `HyundaiSafetyFlags.ALT_STANDSTILL` (IntFlag member, value `1024`). Consumed by Task 3 (C decode must match the value) and Task 4 (interface OR-in).
++
++- [ ] **Step 1: Add the flag member**
++
++In `opendbc/car/hyundai/values.py`, the `HyundaiSafetyFlags(IntFlag)` class currently ends:
++
++```python
++  FCEV_GAS = 256
++  ALT_LIMITS_2 = 512
++```
++
++Change to:
++
++```python
++  FCEV_GAS = 256
++  ALT_LIMITS_2 = 512
++  # Personal fork (Sonata LF Hybrid): car runs standard 'hyundai' safety but WHL_SPD11 (0x386)
++  # has no valid counter/checksum. This bit tells the panda safety RX check to skip 0x386 integrity
++  # (that message only) and derive vehicle_moving from TCS13 (0x394) StandStill instead.
++  # Value MUST match HYUNDAI_PARAM_ALT_STANDSTILL in opendbc/safety/modes/hyundai_common.h.
++  ALT_STANDSTILL = 1024
++```
++
++- [ ] **Step 2: Verify import + value, no collision**
++
++Run:
++```bash
++python -c "from opendbc.car.hyundai.values import HyundaiSafetyFlags as F; \
++assert F.ALT_STANDSTILL.value == 1024; \
++vals=[f.value for f in F]; assert len(vals)==len(set(vals)), 'flag value collision'; \
++print('ALT_STANDSTILL=1024 OK, no collisions')"
++```
++Expected: `ALT_STANDSTILL=1024 OK, no collisions`
++
++- [ ] **Step 3: Confirm the existing hyundai python suite still passes**
++
++Run:
++```bash
++python -m pytest opendbc/car/hyundai/tests/test_hyundai.py -q
++```
++Expected: all pass (the flag<->safetyParam parity test at `test_hyundai.py` still passes because `ALT_STANDSTILL` is not yet attached to any platform).
++
++- [ ] **Step 4: Commit**
++
++```bash
++git add opendbc/car/hyundai/values.py
++git commit -m "hyundai: add ALT_STANDSTILL safety flag (personal fork)"
++```
++
++---
++
++### Task 2: Refactor `HYUNDAI_COMMON_RX_CHECKS` to two params (behavior-preserving)
++
++**Files:**
++- Modify: `opendbc/safety/modes/hyundai.h` (macro definition ~lines 41-47; six call sites)
++- Test: `opendbc/safety/tests/test_hyundai.py` (all existing hyundai safety tests must pass unchanged)
++
++**Interfaces:**
++- Produces: `HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)` — `whl_legacy` gates 0x386 (WHL_SPD11) integrity, `tcs13_legacy` gates 0x394 (TCS13) integrity. Consumed by Task 3.
++
++**Why this is a separate task:** the single-param macro applies the same `legacy` value to BOTH 0x386 and 0x394. Task 3 needs to relax only 0x386. Splitting the param first — as a pure, behavior-preserving refactor — isolates the risky arity change from the feature and lets the existing test suite prove it changed nothing.
++
++- [ ] **Step 1: Change the macro to two params**
++
++In `opendbc/safety/modes/hyundai.h`, replace:
++
++```c
++#define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
++  {.msg = {{0x260, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true},                                                                                           \
++           {0x371, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},                                                    \
++  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (legacy), .ignore_counter = (legacy), .max_counter = (legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
++  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (legacy), .ignore_counter = (legacy), .max_counter = (legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
++  {.msg = {{0x251, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                              \
++  {.msg = {{0x4F1, 0, 4, 50U, .ignore_checksum = true, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                                  \
++```
++
++with:
++
++```c
++#define HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)                                                                                                                             \
++  {.msg = {{0x260, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true},                                                                                           \
++           {0x371, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},                                                    \
++  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (whl_legacy), .ignore_counter = (whl_legacy), .max_counter = (whl_legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
++  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (tcs13_legacy), .ignore_counter = (tcs13_legacy), .max_counter = (tcs13_legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
++  {.msg = {{0x251, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                              \
++  {.msg = {{0x4F1, 0, 4, 50U, .ignore_checksum = true, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                                  \
++```
++
++- [ ] **Step 2: Update all SIX call sites**
++
++Every existing `HYUNDAI_COMMON_RX_CHECKS(...)` call in `opendbc/safety/modes/hyundai.h` must pass two args. Find them:
++```bash
++grep -n "HYUNDAI_COMMON_RX_CHECKS(" opendbc/safety/modes/hyundai.h
++```
++Expected: 7 lines — the macro definition plus 6 calls. Edit each **call** as follows (the five non-legacy calls become `(false, false)`; the one legacy call becomes `(true, true)`):
++
++- `hyundai_long_rx_checks` (longitudinal): `HYUNDAI_COMMON_RX_CHECKS(false)` → `HYUNDAI_COMMON_RX_CHECKS(false, false)`
++- `hyundai_fcev_long_rx_checks` (fcev long): `HYUNDAI_COMMON_RX_CHECKS(false)` → `HYUNDAI_COMMON_RX_CHECKS(false, false)`
++- `hyundai_cam_scc_rx_checks` (camera scc): `HYUNDAI_COMMON_RX_CHECKS(false)` → `HYUNDAI_COMMON_RX_CHECKS(false, false)`
++- `hyundai_rx_checks` (non-long): `HYUNDAI_COMMON_RX_CHECKS(false)` → `HYUNDAI_COMMON_RX_CHECKS(false, false)`  *(note: this line has 7-space indentation — edit it distinctly from the 3-space ones)*
++- `hyundai_fcev_rx_checks` (fcev non-long): `HYUNDAI_COMMON_RX_CHECKS(false)` → `HYUNDAI_COMMON_RX_CHECKS(false, false)`
++- `hyundai_legacy_rx_checks` (legacy mode): `HYUNDAI_COMMON_RX_CHECKS(true)` → `HYUNDAI_COMMON_RX_CHECKS(true, true)`
++
++- [ ] **Step 3: Verify no single-arg calls remain**
++
++Run:
++```bash
++grep -nE "HYUNDAI_COMMON_RX_CHECKS\((true|false)\)" opendbc/safety/modes/hyundai.h || echo "no single-arg calls remain"
++```
++Expected: `no single-arg calls remain`
++
++- [ ] **Step 4: Build safety + run the full hyundai safety suite (proves refactor is behavior-preserving)**
++
++Run:
++```bash
++scons -j8 opendbc/safety && python -m unittest opendbc.safety.tests.test_hyundai -v
++```
++Expected: compiles cleanly; the same test count as before this task, all `ok` (ending `OK (skipped=4)`). Any compile error means a missed/mis-edited call site — fix and rerun.
++
++- [ ] **Step 5: Commit**
++
++```bash
++git add opendbc/safety/modes/hyundai.h
++git commit -m "hyundai/safety: split HYUNDAI_COMMON_RX_CHECKS into (whl,tcs13) params (no behavior change)"
++```
++
++---
++
++### Task 3: Implement `ALT_STANDSTILL` in panda safety (C) + unit tests
++
++**Files:**
++- Modify: `opendbc/safety/modes/hyundai_common.h` (param decode + new global bool)
++- Modify: `opendbc/safety/modes/hyundai.h` (new relaxed long RX array; `vehicle_moving` from TCS13 in `hyundai_rx_hook`)
++- Test: `opendbc/safety/tests/test_hyundai.py` (new class `TestHyundaiLongitudinalSafetyAltStandstill`)
++
++**Interfaces:**
++- Consumes: `HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)` (Task 2); `HyundaiSafetyFlags.ALT_STANDSTILL == 1024` (Task 1).
++- Produces: C global `hyundai_alt_standstill`; param `HYUNDAI_PARAM_ALT_STANDSTILL = 1024`; behavior — when the param bit is set, 0x386 RX integrity is skipped and `vehicle_moving = !TCS13.StandStill`.
++
++- [ ] **Step 1 (TDD): Write the failing test class**
++
++Append to `opendbc/safety/tests/test_hyundai.py`, immediately after the `TestHyundaiSafetyFCEVLong` class and before `if __name__`:
++
++```python
++class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
++  """
++    CAR.HYUNDAI_SONATA_LF_HYBRID (personal fork): non-legacy 'hyundai' safety with openpilot
++    longitudinal. WHL_SPD11 (0x386) has no valid counter/checksum on this car, so
++    HyundaiSafetyFlags.ALT_STANDSTILL exempts 0x386 from RX integrity and sources vehicle_moving
++    from TCS13 (0x394) StandStill instead. TCS13 keeps full integrity checks; it carries both the
++    brake (DriverOverride) and the standstill bit, so we model them together in one message.
++  """
++  cnt_tcs13 = 0
++
++  def setUp(self):
++    self.packer = CANPackerSafety("hyundai_can_generated")
++    self.safety = libsafety_py.libsafety
++    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai,
++                                 HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.HYBRID_GAS |
++                                 HyundaiSafetyFlags.ALT_STANDSTILL)
++    self.safety.init_tests()
++    # TCS13 (0x394) carries both brake and standstill; track both so the two helpers emit a
++    # single consistent message instead of clobbering each other.
++    self._brake = False
++    self._standstill = True
++
++  # hybrid gas comes from E_EMS11 (0x371)
++  def _user_gas_msg(self, gas):
++    values = {"CR_Vcu_AccPedDep_Pos": gas}
++    return self.packer.make_can_msg_safety("E_EMS11", 0, values, fix_checksum=checksum)
++
++  def _tcs13_msg(self):
++    values = {"DriverOverride": 2 if self._brake else 0,
++              "StandStill": 1 if self._standstill else 0,
++              "AliveCounterTCS": self.__class__.cnt_tcs13 % 8}
++    self.__class__.cnt_tcs13 += 1
++    return self.packer.make_can_msg_safety("TCS13", 0, values, fix_checksum=checksum)
++
++  def _user_brake_msg(self, brake):
++    self._brake = bool(brake)
++    return self._tcs13_msg()
++
++  # ALT_STANDSTILL: vehicle_moving is TCS13.StandStill, not WHL_SPD11
++  def _vehicle_moving_msg(self, speed):
++    self._standstill = speed <= self.STANDSTILL_THRESHOLD
++    return self._tcs13_msg()
++
++  def _whl_spd_bad_integrity_msg(self):
++    # Mimic this car's WHL_SPD11 (0x386): frozen counter + invalid checksum (flip checksum bits).
++    values = {"WHL_SPD_%s" % s: 20.0 for s in ["FL", "FR", "RL", "RR"]}
++    values["WHL_SPD_AliveCounter_LSB"] = 0
++    values["WHL_SPD_AliveCounter_MSB"] = 0
++    def corrupt(msg):
++      addr, dat, bus = checksum(msg)
++      dat = bytearray(dat)
++      dat[5] ^= 0xC0  # WHL_SPD11 checksum bits live in byte 5 high bits -> make invalid
++      return addr, bytes(dat), bus
++    return self.packer.make_can_msg_safety("WHL_SPD11", 0, values, fix_checksum=corrupt)
++
++  def test_whl_spd_bad_integrity_allowed(self):
++    # 0x386 lacks valid counter/checksum on this car; RX must NOT drop controls under ALT_STANDSTILL
++    self.safety.set_controls_allowed(True)
++    for _ in range(10):  # > MAX_WRONG_COUNTERS
++      self.assertTrue(self._rx(self._whl_spd_bad_integrity_msg()))
++      self.assertTrue(self.safety.get_controls_allowed())
++
++  def test_tcs13_integrity_still_required(self):
++    # 0x394 must stay strict: a bad checksum on TCS13 is rejected (not relaxed by ALT_STANDSTILL)
++    def bad(msg):
++      addr, dat, bus = checksum(msg)
++      dat = bytearray(dat); dat[6] ^= 0x0F  # corrupt TCS13 checksum nibble
++      return addr, bytes(dat), bus
++    m = self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": 0}, fix_checksum=bad)
++    self.assertFalse(self._rx(m))
++
++  def test_vehicle_moving_from_tcs13(self):
++    self._rx(self._vehicle_moving_msg(0.0))
++    self.assertFalse(self.safety.get_vehicle_moving())      # StandStill=1 -> not moving
++    self._rx(self._vehicle_moving_msg(5.0))
++    self.assertTrue(self.safety.get_vehicle_moving())       # StandStill=0 -> moving
++```
++
++- [ ] **Step 2 (TDD): Run it and watch it fail**
++
++Run:
++```bash
++python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiLongitudinalSafetyAltStandstill -v
++```
++Expected: FAIL — either `set_safety_hooks(...)` errors / does nothing meaningful (flag not decoded yet) or `test_vehicle_moving_from_tcs13` fails (vehicle_moving still tracks 0x386, not TCS13). This confirms the test exercises unimplemented behavior.
++
++- [ ] **Step 3: Decode the new param bit (hyundai_common.h)**
++
++In `opendbc/safety/modes/hyundai_common.h`, next to the other `bool hyundai_*` globals near the top (where `hyundai_alt_limits_2` is declared):
++
++```c
++extern bool hyundai_alt_limits_2;
++bool hyundai_alt_limits_2 = false;
++```
++
++add:
++
++```c
++extern bool hyundai_alt_standstill;
++bool hyundai_alt_standstill = false;
++```
++
++Then inside `hyundai_common_init`, after:
++
++```c
++  const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;
++```
++add:
++```c
++  const uint16_t HYUNDAI_PARAM_ALT_STANDSTILL = 1024;
++```
++and after:
++```c
++  hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);
++```
++add:
++```c
++  hyundai_alt_standstill = GET_FLAG(param, HYUNDAI_PARAM_ALT_STANDSTILL);
++```
++
++- [ ] **Step 4: Add the relaxed longitudinal RX-check array (hyundai.h)**
++
++In `opendbc/safety/modes/hyundai.h`, inside `hyundai_init`, in the `if (hyundai_longitudinal) {` block, the arrays currently read:
++
++```c
++    static RxCheck hyundai_long_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
++    };
++
++    static RxCheck hyundai_fcev_long_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
++      HYUNDAI_FCEV_GAS_ADDR_CHECK
++    };
++
++    if (hyundai_fcev_gas_signal) {
++      SET_RX_CHECKS(hyundai_fcev_long_rx_checks, ret);
++    } else {
++      SET_RX_CHECKS(hyundai_long_rx_checks, ret);
++    }
++```
++
++Change to (add the third array and prefer it when the flag is set):
++
++```c
++    static RxCheck hyundai_long_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
++    };
++
++    static RxCheck hyundai_fcev_long_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
++      HYUNDAI_FCEV_GAS_ADDR_CHECK
++    };
++
++    // Personal fork (Sonata LF Hybrid): WHL_SPD11 (0x386) has no valid counter/checksum on this
++    // car. Relax 0x386 integrity ONLY (0x394/TCS13 stays strict); vehicle_moving comes from TCS13.
++    static RxCheck hyundai_long_alt_standstill_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(true, false)
++    };
++
++    if (hyundai_alt_standstill) {
++      SET_RX_CHECKS(hyundai_long_alt_standstill_rx_checks, ret);
++    } else if (hyundai_fcev_gas_signal) {
++      SET_RX_CHECKS(hyundai_fcev_long_rx_checks, ret);
++    } else {
++      SET_RX_CHECKS(hyundai_long_rx_checks, ret);
++    }
++```
++
++- [ ] **Step 5: Source `vehicle_moving` from TCS13 when the flag is set (hyundai.h `hyundai_rx_hook`)**
++
++Currently:
++
++```c
++    // sample wheel speed, averaging opposite corners
++    if (msg->addr == 0x386U) {
++      uint32_t front_left_speed = GET_BYTES(msg, 0, 2) & 0x3FFFU;
++      uint32_t rear_right_speed = GET_BYTES(msg, 6, 2) & 0x3FFFU;
++      vehicle_moving = (front_left_speed > HYUNDAI_STANDSTILL_THRSLD) || (rear_right_speed > HYUNDAI_STANDSTILL_THRSLD);
++    }
++
++    if (msg->addr == 0x394U) {
++      brake_pressed = ((msg->data[5] >> 5U) & 0x3U) == 0x2U;
++    }
++```
++
++Change to:
++
++```c
++    // sample wheel speed, averaging opposite corners
++    if ((msg->addr == 0x386U) && !hyundai_alt_standstill) {
++      uint32_t front_left_speed = GET_BYTES(msg, 0, 2) & 0x3FFFU;
++      uint32_t rear_right_speed = GET_BYTES(msg, 6, 2) & 0x3FFFU;
++      vehicle_moving = (front_left_speed > HYUNDAI_STANDSTILL_THRSLD) || (rear_right_speed > HYUNDAI_STANDSTILL_THRSLD);
++    }
++
++    if (msg->addr == 0x394U) {
++      brake_pressed = ((msg->data[5] >> 5U) & 0x3U) == 0x2U;
++      // Personal fork (Sonata LF Hybrid): 0x386 lacks integrity; TCS13.StandStill (bit 47) is the
++      // integrity-valid standstill source. StandStill == 1 means stopped (verified on owner route).
++      if (hyundai_alt_standstill) {
++        vehicle_moving = !GET_BIT(msg, 47U);
++      }
++    }
++```
++
++- [ ] **Step 6: Build + run the new test class to PASS**
++
++Run:
++```bash
++scons -j8 opendbc/safety && python -m unittest opendbc.safety.tests.test_hyundai.TestHyundaiLongitudinalSafetyAltStandstill -v
++```
++Expected: all methods `ok` (inherited longitudinal tests + `test_whl_spd_bad_integrity_allowed`, `test_tcs13_integrity_still_required`, `test_vehicle_moving_from_tcs13`), ending `OK (skipped=4)`.
++
++- [ ] **Step 7: Run the full safety suite + coverage gate (no regressions, 100% C coverage)**
++
++Run:
++```bash
++python -m unittest opendbc.safety.tests.test_hyundai -v && ./opendbc/safety/tests/test.sh
++```
++Expected: all hyundai tests pass; `test.sh` (MISRA + `gcovr --fail-under-line=100`) passes. If coverage fails on the new branches, add a targeted assertion (e.g. also assert `vehicle_moving` under the non-flag path is still covered by the existing non-ALT class — it is).
++
++- [ ] **Step 8: Commit**
++
++```bash
++git add opendbc/safety/modes/hyundai_common.h opendbc/safety/modes/hyundai.h opendbc/safety/tests/test_hyundai.py
++git commit -m "hyundai/safety: ALT_STANDSTILL — relax 0x386 integrity, standstill from TCS13 (personal fork)"
++```
++
++---
++
++### Task 4: Add the `HYUNDAI_SONATA_LF_HYBRID` platform + wire the safety param
++
++**Files:**
++- Modify: `opendbc/car/hyundai/values.py` (new `CAR` entry; add to `STEER_MAX = 255` bucket)
++- Modify: `opendbc/car/hyundai/interface.py` (OR `ALT_STANDSTILL` into `safetyParam` — LOAD-BEARING)
++- Modify: `opendbc/car/hyundai/fingerprints.py` (`FW_VERSIONS` entry)
++- Modify: `opendbc/car/torque_data/substitute.toml`
++- Modify: `opendbc/car/tests/routes.py`
++- Modify: `opendbc/car/hyundai/tests/test_hyundai.py` (`no_eps_platforms`)
++- Test: `opendbc/car/hyundai/tests/test_hyundai.py`
++
++**Interfaces:**
++- Consumes: `HyundaiSafetyFlags.ALT_STANDSTILL` (Task 1); `hyundai_alt_standstill` behavior (Task 3).
++- Produces: `CAR.HYUNDAI_SONATA_LF_HYBRID`. carcontroller/hyundaican/carstate need **no change** — all longitudinal actuation is flag-driven off `HYBRID` + `openpilotLongitudinalControl` (verified).
++
++- [ ] **Step 1: Add the platform config (values.py)**
++
++In `opendbc/car/hyundai/values.py`, immediately after the `HYUNDAI_SONATA_LF` entry (before `HYUNDAI_STARIA_4TH_GEN`):
++
++```python
++  # Personal fork: LF Hybrid on standard 'hyundai' safety with openpilot longitudinal.
++  # Flags = HYBRID only: NO LEGACY (so it uses standard hyundai safety + alphaLong available),
++  # NO UNSUPPORTED_LONGITUDINAL (keeps alphaLongitudinalAvailable True), NO TCU_GEARS (hybrid uses
++  # ELECT_GEAR). 0x386 integrity is relaxed via HyundaiSafetyFlags.ALT_STANDSTILL set in interface.py.
++  # steerRatio 13.27*1.15 mirrors the ICE LF and matches low-speed route estimate; refine from
++  # liveParameters.steerRatio on a highway route. mass ~1595 kg (LF Hybrid curb), owner-refinable.
++  HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
++    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
++    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
++    flags=HyundaiFlags.HYBRID,
++  )
++```
++
++> **MANDO_RADAR note (optional, do NOT add by default):** the radar outputs tracks (0x500–0x535 present on the route), so `HyundaiFlags.MANDO_RADAR` is technically viable. But openpilot longitudinal disables the radar via 0x7D0, which also stops its tracks — so setting `MANDO_RADAR` yields no lead data once the radar is silenced, and the initial config uses vision lead. Only revisit this on-car if the radar is found to keep emitting tracks after the disable. Leaving it off matches the working baseline.
++
++- [ ] **Step 2: Add to the `STEER_MAX = 255` bucket (values.py)**
++
++In `CarControllerParams.__init__`, the `elif CP.carFingerprint in (...)` tuple that sets `self.STEER_MAX = 255` currently contains `CAR.HYUNDAI_SONATA_LF`. Add the hybrid right after it:
++
++```python
++    elif CP.carFingerprint in (CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA, CAR.HYUNDAI_ELANTRA_GT_I30, CAR.HYUNDAI_IONIQ,
++                               CAR.HYUNDAI_IONIQ_EV_LTD, CAR.HYUNDAI_SANTA_FE_PHEV_2022, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_SONATA_LF_HYBRID,
++                               CAR.KIA_FORTE, CAR.KIA_NIRO_PHEV, CAR.KIA_OPTIMA_H, CAR.KIA_OPTIMA_H_G4_FL, CAR.KIA_SORENTO):
++      self.STEER_MAX = 255
++```
++
++- [ ] **Step 3: Wire the safety param (interface.py) — LOAD-BEARING**
++
++In `opendbc/car/hyundai/interface.py`, in the car-specific overrides section (after the `KIA_OPTIMA_G4_FL` `steerActuatorDelay` override, before the `ALT_LIMITS_2` dashcam block), add:
++
++```python
++    if candidate == CAR.KIA_OPTIMA_G4_FL:
++      ret.steerActuatorDelay = 0.2
++
++    # Personal fork: LF Hybrid runs standard 'hyundai' safety but WHL_SPD11 (0x386) lacks a valid
++    # counter/checksum. Tell the panda RX check to skip 0x386 integrity and use TCS13 (0x394)
++    # StandStill for vehicle_moving. Without this line the panda faults 0x386 and never engages.
++    if candidate == CAR.HYUNDAI_SONATA_LF_HYBRID:
++      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_STANDSTILL.value
++```
++
++> No edits needed at `interface.py:87` (alphaLongitudinalAvailable) or `:98-102` (safety-mode select): because the platform carries neither `LEGACY` nor `UNSUPPORTED_LONGITUDINAL`, line 87 yields `alphaLongitudinalAvailable = True` and line 102 selects standard `hyundai` safety automatically. `openpilotLongitudinalControl` then becomes `alpha_long and True`, and `HyundaiSafetyFlags.LONG`/`HYBRID_GAS` are OR'd in at lines 138/140.
++
++- [ ] **Step 4: Add the FW fingerprint (fingerprints.py)**
++
++In `opendbc/car/hyundai/fingerprints.py`, add to the `FW_VERSIONS` dict:
++
++```python
++  CAR.HYUNDAI_SONATA_LF_HYBRID: {
++    (Ecu.fwdRadar, 0x7d0, None): [
++      b'\xf1\x00LFhe SCC FNCUP      1.00 1.02 96400-E6500         ',
++    ],
++    (Ecu.fwdCamera, 0x7c4, None): [
++      b'\xf1\x00LFH MFC  AT KOR LHD 1.00 1.01 95740-E6000 171107',
++    ],
++  },
++```
++
++- [ ] **Step 5: Torque substitution (substitute.toml)**
++
++In `opendbc/car/torque_data/substitute.toml`, add (torque tune shared with the LF platform):
++
++```toml
++"HYUNDAI_SONATA_LF_HYBRID" = "HYUNDAI_SONATA_LF"
++```
++
++- [ ] **Step 6: Test route (routes.py)**
++
++In `opendbc/car/tests/routes.py`, add near the other Hyundai routes:
++
++```python
++  CarTestRoute("9f9b411a57b8ce21/00000001--d6d081f0e7", HYUNDAI.HYUNDAI_SONATA_LF_HYBRID),
++```
++
++- [ ] **Step 7: EPS exclusion (test_hyundai.py)**
++
++In `opendbc/car/hyundai/tests/test_hyundai.py`, add `CAR.HYUNDAI_SONATA_LF_HYBRID` to the `no_eps_platforms` set (this platform has no EPS query, like the ICE LF):
++
++```python
++    no_eps_platforms = CANFD_CAR | {CAR.KIA_SORENTO, CAR.KIA_OPTIMA_G4, CAR.KIA_OPTIMA_G4_FL, CAR.KIA_OPTIMA_H, CAR.KIA_K7_2017,
++                                    CAR.KIA_OPTIMA_H_G4_FL, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_TUCSON, CAR.GENESIS_G90, CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA,
++                                    CAR.HYUNDAI_SONATA_LF_HYBRID}
++```
++
++- [ ] **Step 8: Verify the platform resolves to a longitudinal-capable, correctly-flagged CarParams**
++
++Run:
++```bash
++python -c "
++from opendbc.car.hyundai.values import CAR, HyundaiSafetyFlags
++from opendbc.car.hyundai.interface import CarInterface
++from opendbc.car import structs, gen_empty_fingerprint
++CP = CarInterface.get_params(CAR.HYUNDAI_SONATA_LF_HYBRID, gen_empty_fingerprint(), [], alpha_long=True, is_release=False, docs=False)
++assert CP.openpilotLongitudinalControl, 'long not enabled'
++assert CP.safetyConfigs[-1].safetyModel == structs.CarParams.SafetyModel.hyundai, CP.safetyConfigs[-1].safetyModel
++p = CP.safetyConfigs[-1].safetyParam
++for f in (HyundaiSafetyFlags.LONG, HyundaiSafetyFlags.HYBRID_GAS, HyundaiSafetyFlags.ALT_STANDSTILL):
++    assert p & f.value, f'missing {f.name}'
++print('OK: hyundai safety, long ON, param has LONG|HYBRID_GAS|ALT_STANDSTILL')
++"
++```
++Expected: `OK: hyundai safety, long ON, param has LONG|HYBRID_GAS|ALT_STANDSTILL`
++(The exact `get_params` signature may vary by opendbc version; if it differs, match the signature used in `opendbc/car/tests/test_models.py`.)
++
++- [ ] **Step 9: Run the hyundai car test suite**
++
++Run:
++```bash
++python -m pytest opendbc/car/hyundai/tests/test_hyundai.py -q
++```
++Expected: all pass — including fuzzy-fingerprint, `test_platform_code_ecus_available` (car is in `no_eps_platforms`), and the hybrid-not-in-CAN_GEARS check (car has no `TCU_GEARS`).
++
++- [ ] **Step 10: Confirm the actuation files are untouched**
++
++Run:
++```bash
++git diff --stat opendbc/car/hyundai/carcontroller.py opendbc/car/hyundai/hyundaican.py opendbc/car/hyundai/carstate.py
++```
++Expected: no output (zero changes) — proof the actuation/state path needed no edits.
++
++- [ ] **Step 11: Commit**
++
++```bash
++git add opendbc/car/hyundai/values.py opendbc/car/hyundai/interface.py opendbc/car/hyundai/fingerprints.py \
++        opendbc/car/torque_data/substitute.toml opendbc/car/tests/routes.py opendbc/car/hyundai/tests/test_hyundai.py
++git commit -m "hyundai: add Sonata LF Hybrid on standard safety with openpilot longitudinal (personal fork)"
++```
++
++---
++
++### Task 5: Offline replay validation against the owner's route
++
++**Files:**
++- Create: `opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py`
++
++**Interfaces:**
++- Consumes: `CAR.HYUNDAI_SONATA_LF_HYBRID` (Task 4), `HyundaiSafetyFlags.ALT_STANDSTILL` (Task 1).
++- Produces: an executable script that proves the RX/parse/plumbing path on real recorded CAN.
++
++**Why:** validates end-to-end that the interface builds a longitudinal-capable CarParams and parses this car's real CAN (speeds/cruise/brake/gas/standstill) without error. It CANNOT prove actuation (route was recorded on stock ACC) — documented in the script.
++
++- [ ] **Step 1: Write the replay script**
++
++Create `opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py`:
++
++```python
++#!/usr/bin/env python3
++"""Offline replay validation for openpilot-longitudinal PLUMBING on CAR.HYUNDAI_SONATA_LF_HYBRID.
++
++Reads the owner's THREE LOCAL rlog.zst segments directly (not the comma_car_segments network
++dataset). Proves: (1) LogReader decodes the logs, (2) get_params yields openpilotLongitudinalControl
++with the hyundai safety model + LONG|HYBRID_GAS|ALT_STANDSTILL param bits, (3) every CAN frame flows
++through CarInterface.update() without raising and CarState signals stay in range, (4) TCS13.StandStill
++polarity matches speed (regression guard for the load-bearing assumption).
++
++Does NOT prove actuation: the route was recorded on stock ACC, so only RX/plumbing is exercised.
++
++Run:
++  uv run --with zstandard python opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
++"""
++import sys
++import math
++
++from opendbc.car import gen_empty_fingerprint, structs
++from opendbc.car.can_definitions import CanData
++from opendbc.car.car_helpers import interfaces
++from opendbc.car.hyundai.values import CAR, HyundaiSafetyFlags
++from opendbc.car.logreader import LogReader
++from opendbc.can.parser import CANParser
++
++PLATFORM = CAR.HYUNDAI_SONATA_LF_HYBRID
++SEGMENTS = sys.argv[1:] or [
++  "/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--0--rlog.zst",
++  "/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--2--rlog.zst",
++  "/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--3--rlog.zst",
++]
++
++
++def load_can(paths):
++  events = []
++  for p in paths:
++    seg = [m for m in LogReader(p, only_union_types=True, sort_by_time=True) if m.which() == "can"]
++    print(f"  {p}: {len(seg)} can events")
++    events.extend(seg)
++  events.sort(key=lambda m: m.logMonoTime)
++  return events
++
++
++def check_params():
++  CI = interfaces[PLATFORM]
++  CP = CI.get_params(PLATFORM, gen_empty_fingerprint(), [], alpha_long=True, is_release=False, docs=False)
++  assert CP.openpilotLongitudinalControl, "openpilotLongitudinalControl is False"
++  assert CP.safetyConfigs[-1].safetyModel == structs.CarParams.SafetyModel.hyundai, "not on hyundai safety"
++  p = CP.safetyConfigs[-1].safetyParam
++  for f in (HyundaiSafetyFlags.LONG, HyundaiSafetyFlags.HYBRID_GAS, HyundaiSafetyFlags.ALT_STANDSTILL):
++    assert p & f.value, f"safetyParam missing {f.name}"
++  print("  CarParams OK: hyundai safety, long ON, param LONG|HYBRID_GAS|ALT_STANDSTILL")
++  return CP, CI
++
++
++def replay_state(CP, CI, can_msgs):
++  ci = CI(CP)
++  CC = structs.CarControl().as_reader()
++  vmax = 0.0
++  n = 0
++  for m in can_msgs:
++    frames = [CanData(c.address, c.dat, c.src) for c in m.can]
++    cs = ci.update([(m.logMonoTime, frames)])
++    ci.apply(CC, m.logMonoTime)
++    vmax = max(vmax, cs.vEgo)
++    assert -1.0 <= cs.vEgo <= 80.0, f"vEgo out of range: {cs.vEgo}"
++    n += 1
++  print(f"  replayed {n} frames without error; max vEgo={vmax * 3.6:.1f} km/h")
++
++
++def check_standstill_polarity(can_msgs):
++  cp = CANParser("hyundai_can_generated", [("TCS13", 0), ("WHL_SPD11", 0)], 0)
++  stopped_bit1 = stopped_n = moving_bit0 = moving_n = 0
++  for m in can_msgs:
++    cp.update((m.logMonoTime, [(c.address, bytes(c.dat), c.src) for c in m.can]))
++    ss = int(round(cp.vl["TCS13"]["StandStill"]))
++    w = cp.vl["WHL_SPD11"]
++    v = (w["WHL_SPD_FL"] + w["WHL_SPD_FR"] + w["WHL_SPD_RL"] + w["WHL_SPD_RR"]) / 4.0
++    if v < 0.3:
++      stopped_n += 1; stopped_bit1 += (ss == 1)
++    elif v > 5.0:
++      moving_n += 1; moving_bit0 += (ss == 0)
++  r_stop = stopped_bit1 / max(stopped_n, 1)
++  r_move = moving_bit0 / max(moving_n, 1)
++  print(f"  StandStill polarity: stopped->1 {100*r_stop:.1f}%, moving->0 {100*r_move:.1f}%")
++  assert r_stop > 0.9 and r_move > 0.9, "StandStill polarity FAILED — vehicle_moving = !bit47 is wrong"
++
++
++def main():
++  print("Loading segments:")
++  can_msgs = load_can(SEGMENTS)
++  print("Checking CarParams:")
++  CP, CI = check_params()
++  print("Replaying CarState:")
++  replay_state(CP, CI, can_msgs)
++  print("Checking StandStill polarity (regression guard):")
++  check_standstill_polarity(can_msgs)
++  print("\nALL OFFLINE CHECKS PASSED (plumbing only; actuation is on-car).")
++
++
++if __name__ == "__main__":
++  main()
++```
++
++- [ ] **Step 2: Run it**
++
++Run:
++```bash
++uv run --with zstandard python opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
++```
++Expected (approximate):
++```
++  ...--0--rlog.zst: 6120 can events
++  ...
++  CarParams OK: hyundai safety, long ON, param LONG|HYBRID_GAS|ALT_STANDSTILL
++  replayed 18121 frames without error; max vEgo=36.6 km/h
++  StandStill polarity: stopped->1 98.2%, moving->0 100.0%
++ALL OFFLINE CHECKS PASSED (plumbing only; actuation is on-car).
++```
++
++- [ ] **Step 3: Commit**
++
++```bash
++git add opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
++git commit -m "hyundai: offline replay validation for Sonata LF Hybrid longitudinal (personal fork)"
++```
++
++---
++
++### Task 6: On-car bring-up documentation
++
++**Files:**
++- Create: `docs/sonata-lf-hev-long-oncar.md`
++
++**Why:** the offline tasks cannot verify the two runtime-only facts (radar 0x7D0 disable acceptance; real actuation/ride). This documents the fork/flash workflow, the on-car checklist, the accepted tradeoffs, and the abort criteria.
++
++- [ ] **Step 1: Write the doc**
++
++Create `docs/sonata-lf-hev-long-oncar.md`:
++
++```markdown
++# Sonata LF Hybrid — openpilot longitudinal on-car bring-up (personal fork)
++
++## What this fork changes
++- Moves CAR.HYUNDAI_SONATA_LF_HYBRID onto standard `hyundai` panda safety (not `hyundaiLegacy`).
++- Adds `HyundaiSafetyFlags.ALT_STANDSTILL` (1024): relaxes only WHL_SPD11 (0x386) RX integrity
++  (that message has no valid counter/checksum on this car) and derives `vehicle_moving` from the
++  integrity-valid TCS13 (0x394) `StandStill` bit.
++- Enables openpilot longitudinal availability; all actuation is the stock hyundai flag-driven path.
++
++## Build / flash (openpilot side — outside opendbc)
++1. openpilot vendors opendbc as the `opendbc_repo` submodule. Point it at this fork's
++   `sonata-lf-hev-long` branch (add fork remote, fetch, checkout inside `opendbc_repo`).
++2. Run openpilot's build (`scons`). The panda firmware is compiled FROM the vendored opendbc/safety
++   and auto-flashed by `pandad` on the next boot when its signature changes. No manual DFU needed.
++3. MUST be a NON-RELEASE branch: `hyundai_longitudinal` is behind `#ifdef ALLOW_DEBUG`, and the
++   "openpilot Longitudinal Control (Alpha)" toggle is hidden on release branches.
++4. Hardware: comma 3/3X + the correct in-line Hyundai harness (must sit between the radar and the
++   rest of the bus so panda can both inject SCC12 and issue the 0x7D0 disable).
++
++## Enable at runtime
++- Toggle **openpilot Longitudinal Control (Alpha)** (param `AlphaLongitudinalEnabled`). It is only
++  visible because `alphaLongitudinalAvailable` is now True for this car.
++
++## On-car checklist (in order, abort if any step fails)
++1. Engage on a safe, empty road at low speed. Confirm openpilot ACC engages (not stock cruise).
++2. **Radar disable (the key unknown):** confirm the stock radar stops transmitting SCC — i.e. no
++   "SCC conditions not met" fight, no dual-SCC on the bus. If the radar refuses the 0x7D0 disable,
++   openpilot ACC and factory SCC will conflict — ABORT and revert; this car is not viable without
++   a working radar disable.
++3. Verify standstill: at a full stop, openpilot holds; on lead pull-away it resumes cleanly
++   (this exercises TCS13.StandStill sourcing).
++4. Verify driver override: tap the brake -> immediate disengage; press the gas -> override.
++5. Evaluate ride quality (jerk, stopping distance, creep). The tune is the generic hyundai
++   longitudinal tune; if stops are harsh, that is tuning, not a safety issue.
++
++## Accepted tradeoffs / known limits
++- **Factory AEB/FCW is lost** while openpilot longitudinal is on (radar is disabled). This is
++  inherent to radar-SCC openpilot longitudinal, not specific to this fork.
++- Longitudinal tune is not validated for this exact car; ride quality may differ from stock SCC.
++- steerRatio default is `13.27*1.15`; refine from `liveParameters.steerRatio` on a highway route.
++
++## Do not
++- Do not run on a release branch. Do not open an upstream PR (this relaxes a safety check for one
++  car). Do not set MANDO_RADAR unless the radar is confirmed to keep emitting tracks after disable.
++```
++
++- [ ] **Step 2: Commit**
++
++```bash
++git add docs/sonata-lf-hev-long-oncar.md
++git commit -m "docs: Sonata LF Hybrid longitudinal on-car bring-up checklist (personal fork)"
++```
++
++---
++
++## Self-Review
++
++**Spec coverage:**
++- Move off legacy → standard hyundai safety: Task 4 Step 1 (no LEGACY flag) + Step 3 (auto-selects hyundai).
++- New per-car flag, per-car only (not global): Task 1 (python), Task 3 Steps 3-5 (C, gated on `hyundai_alt_standstill`).
++- 0x386 relaxed, 0x394 stays strict: Task 2 (2-param macro) + Task 3 Step 4 (`(true, false)`), asserted by `test_tcs13_integrity_still_required`.
++- vehicle_moving from TCS13: Task 3 Step 5, asserted by `test_vehicle_moving_from_tcs13` + replay polarity guard (Task 5).
++- Enable longitudinal availability: Task 4 Step 3 + Step 8 assertion.
++- Interface safetyParam OR-in (load-bearing): Task 4 Step 3.
++- Actuation unchanged: Task 4 Step 10 (zero-diff proof).
++- Offline validation: Task 5.
++- Runtime unknowns + tradeoffs + fork/flash: Task 6.
++
++**Placeholder scan:** none — every code step has full before/after; every run step has exact command + expected output.
++
++**Type/name consistency:** flag is `ALT_STANDSTILL` / value `1024` on both python (`HyundaiSafetyFlags.ALT_STANDSTILL`, Task 1) and C (`HYUNDAI_PARAM_ALT_STANDSTILL`, global `hyundai_alt_standstill`, Task 3); referenced identically in Task 4 (OR-in) and the test class (Task 3) and replay (Task 5). Macro `HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)` defined in Task 2 and consumed in Task 3 with the same arg order.
++
++**Open items intentionally left to the owner (not gaps):** exact hybrid `mass`; whether to eventually set `MANDO_RADAR`; final `steerRatio` from a highway `liveParameters` capture. None block a working config.
+diff --git a/opendbc/car/hyundai/fingerprints.py b/opendbc/car/hyundai/fingerprints.py
+index 751bef9b..6a09e82d 100644
+--- a/opendbc/car/hyundai/fingerprints.py
++++ b/opendbc/car/hyundai/fingerprints.py
+@@ -230,6 +230,14 @@ FW_VERSIONS = {
+       b'\xf1\x00LFF LKAS AT USA LHD 1.01 1.02 95740-C1000 E52',
+     ],
+   },
++  CAR.HYUNDAI_SONATA_LF_HYBRID: {
++    (Ecu.fwdRadar, 0x7d0, None): [
++      b'\xf1\x00LFhe SCC FNCUP      1.00 1.02 96400-E6500         ',
++    ],
++    (Ecu.fwdCamera, 0x7c4, None): [
++      b'\xf1\x00LFH MFC  AT KOR LHD 1.00 1.01 95740-E6000 171107',
++    ],
++  },
+   CAR.HYUNDAI_TUCSON: {
+     (Ecu.fwdRadar, 0x7d0, None): [
+       b'\xf1\x00TL__ FCA F-CUP      1.00 1.01 99110-D3500         ',
+diff --git a/opendbc/car/hyundai/interface.py b/opendbc/car/hyundai/interface.py
+index c3373aa1..f714ec88 100644
+--- a/opendbc/car/hyundai/interface.py
++++ b/opendbc/car/hyundai/interface.py
+@@ -148,6 +148,12 @@ class CarInterface(CarInterfaceBase):
+     if candidate == CAR.KIA_OPTIMA_G4_FL:
+       ret.steerActuatorDelay = 0.2
+ 
++    # Personal fork: LF Hybrid runs standard 'hyundai' safety but WHL_SPD11 (0x386) lacks a valid
++    # counter/checksum. Tell the panda RX check to skip 0x386 integrity and use TCS13 (0x394)
++    # StandStill for vehicle_moving. Without this line the panda faults 0x386 and never engages.
++    if candidate == CAR.HYUNDAI_SONATA_LF_HYBRID:
++      ret.safetyConfigs[-1].safetyParam |= HyundaiSafetyFlags.ALT_STANDSTILL.value
++
+     # Dashcam cars are missing a test route, or otherwise need validation
+     # TODO: Optima Hybrid 2017 uses a different SCC12 checksum
+     if candidate in (CAR.KIA_OPTIMA_H,):
+diff --git a/opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py b/opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
+new file mode 100644
+index 00000000..d28952a0
+--- /dev/null
++++ b/opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
+@@ -0,0 +1,103 @@
++#!/usr/bin/env python3
++"""Offline replay validation for openpilot-longitudinal plumbing on CAR.HYUNDAI_SONATA_LF_HYBRID.
++
++Reads the owner's three local rlog.zst segments directly, not the comma_car_segments network
++dataset. Proves: (1) LogReader decodes the logs, (2) get_params yields openpilotLongitudinalControl
++with the hyundai safety model plus LONG|HYBRID_GAS|ALT_STANDSTILL param bits, (3) every CAN frame
++flows through CarInterface.update() without raising and CarState signals stay in range, (4)
++TCS13.StandStill polarity matches speed as a regression guard for the load-bearing assumption.
++
++Does not prove actuation: the route was recorded on stock ACC, so only RX/plumbing is exercised.
++
++Run:
++  uv run --with zstandard python opendbc/car/hyundai/tests/replay_sonata_lf_hybrid_long.py
++"""
++import sys
++
++from opendbc.can.parser import CANParser
++from opendbc.car import gen_empty_fingerprint, structs
++from opendbc.car.can_definitions import CanData
++from opendbc.car.car_helpers import interfaces
++from opendbc.car.hyundai.values import CAR, HyundaiSafetyFlags
++from opendbc.car.logreader import LogReader
++
++PLATFORM = CAR.HYUNDAI_SONATA_LF_HYBRID
++SEGMENTS = sys.argv[1:] or [
++  "/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--0--rlog.zst",
++  "/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--2--rlog.zst",
++  "/Users/mark.yeon/Downloads/9f9b411a57b8ce21_00000001--d6d081f0e7--3--rlog.zst",
++]
++
++
++def load_can(paths):
++  events = []
++  for segment_path in paths:
++    segment_events = [message for message in LogReader(segment_path, only_union_types=True, sort_by_time=True) if message.which() == "can"]
++    print(f"  {segment_path}: {len(segment_events)} can events")
++    events.extend(segment_events)
++  events.sort(key=lambda message: message.logMonoTime)
++  return events
++
++
++def check_params():
++  car_interface = interfaces[PLATFORM]
++  car_params = car_interface.get_params(PLATFORM, gen_empty_fingerprint(), [], alpha_long=True, is_release=False, docs=False)
++  assert car_params.openpilotLongitudinalControl, "openpilotLongitudinalControl is False"
++  assert car_params.safetyConfigs[-1].safetyModel == structs.CarParams.SafetyModel.hyundai, "not on hyundai safety"
++  safety_param = car_params.safetyConfigs[-1].safetyParam
++  for safety_flag in (HyundaiSafetyFlags.LONG, HyundaiSafetyFlags.HYBRID_GAS, HyundaiSafetyFlags.ALT_STANDSTILL):
++    assert safety_param & safety_flag.value, f"safetyParam missing {safety_flag.name}"
++  print("  CarParams OK: hyundai safety, long ON, param LONG|HYBRID_GAS|ALT_STANDSTILL")
++  return car_params, car_interface
++
++
++def replay_state(car_params, car_interface, can_msgs):
++  replay_interface = car_interface(car_params)
++  car_control = structs.CarControl().as_reader()
++  max_speed = 0.0
++  replayed_frames = 0
++  for message in can_msgs:
++    frames = [CanData(can.address, can.dat, can.src) for can in message.can]
++    car_state = replay_interface.update([(message.logMonoTime, frames)])
++    replay_interface.apply(car_control, message.logMonoTime)
++    max_speed = max(max_speed, car_state.vEgo)
++    assert -1.0 <= car_state.vEgo <= 80.0, f"vEgo out of range: {car_state.vEgo}"
++    replayed_frames += 1
++  print(f"  replayed {replayed_frames} frames without error; max vEgo={max_speed * 3.6:.1f} km/h")
++
++
++def check_standstill_polarity(can_msgs):
++  can_parser = CANParser("hyundai_can_generated", [("TCS13", 0), ("WHL_SPD11", 0)], 0)
++  stopped_bit1 = stopped_count = moving_bit0 = moving_count = 0
++  for message in can_msgs:
++    can_parser.update((message.logMonoTime, [(can.address, bytes(can.dat), can.src) for can in message.can]))
++    standstill = int(round(can_parser.vl["TCS13"]["StandStill"]))
++    wheel_speeds = can_parser.vl["WHL_SPD11"]
++    wheel_speed = (wheel_speeds["WHL_SPD_FL"] + wheel_speeds["WHL_SPD_FR"] +
++                   wheel_speeds["WHL_SPD_RL"] + wheel_speeds["WHL_SPD_RR"]) / 4.0
++    if wheel_speed < 0.3:
++      stopped_count += 1
++      stopped_bit1 += standstill == 1
++    elif wheel_speed > 5.0:
++      moving_count += 1
++      moving_bit0 += standstill == 0
++  stopped_ratio = stopped_bit1 / max(stopped_count, 1)
++  moving_ratio = moving_bit0 / max(moving_count, 1)
++  print(f"  StandStill polarity: stopped->1 {100 * stopped_ratio:.1f}%, moving->0 {100 * moving_ratio:.1f}%")
++  assert stopped_ratio > 0.9 and moving_ratio > 0.9, "StandStill polarity FAILED; vehicle_moving = !bit47 is wrong"
++
++
++def main():
++  print("Loading segments:")
++  can_msgs = load_can(SEGMENTS)
++  print("Checking CarParams:")
++  car_params, car_interface = check_params()
++  print("Replaying CarState:")
++  replay_state(car_params, car_interface, can_msgs)
++  print("Checking StandStill polarity (regression guard):")
++  check_standstill_polarity(can_msgs)
++  print("\nALL OFFLINE CHECKS PASSED (plumbing only; actuation is on-car).")
++
++
++if __name__ == "__main__":
++  main()
+diff --git a/opendbc/car/hyundai/tests/test_hyundai.py b/opendbc/car/hyundai/tests/test_hyundai.py
+index fddd8fc3..e89ea627 100644
+--- a/opendbc/car/hyundai/tests/test_hyundai.py
++++ b/opendbc/car/hyundai/tests/test_hyundai.py
+@@ -148,7 +148,8 @@ class TestHyundaiFingerprint(unittest.TestCase):
+   def test_platform_code_ecus_available(self):
+     # TODO: add queries for these non-CAN FD cars to get EPS
+     no_eps_platforms = CANFD_CAR | {CAR.KIA_SORENTO, CAR.KIA_OPTIMA_G4, CAR.KIA_OPTIMA_G4_FL, CAR.KIA_OPTIMA_H, CAR.KIA_K7_2017,
+-                                    CAR.KIA_OPTIMA_H_G4_FL, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_TUCSON, CAR.GENESIS_G90, CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA}
++                                    CAR.KIA_OPTIMA_H_G4_FL, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_SONATA_LF_HYBRID, CAR.HYUNDAI_TUCSON,
++                                    CAR.GENESIS_G90, CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA}
+ 
+     # Asserts ECU keys essential for fuzzy fingerprinting are available on all platforms
+     for car_model, ecus in FW_VERSIONS.items():
+diff --git a/opendbc/car/hyundai/values.py b/opendbc/car/hyundai/values.py
+index 43be0a8c..fb2f3a10 100644
+--- a/opendbc/car/hyundai/values.py
++++ b/opendbc/car/hyundai/values.py
+@@ -35,8 +35,8 @@ class CarControllerParams:
+     # To determine the limit for your car, find the maximum value that the stock LKAS will request.
+     # If the max stock LKAS request is <384, add your car to this list.
+     elif CP.carFingerprint in (CAR.GENESIS_G80, CAR.HYUNDAI_ELANTRA, CAR.HYUNDAI_ELANTRA_GT_I30, CAR.HYUNDAI_IONIQ,
+-                               CAR.HYUNDAI_IONIQ_EV_LTD, CAR.HYUNDAI_SANTA_FE_PHEV_2022, CAR.HYUNDAI_SONATA_LF, CAR.KIA_FORTE, CAR.KIA_NIRO_PHEV,
+-                               CAR.KIA_OPTIMA_H, CAR.KIA_OPTIMA_H_G4_FL, CAR.KIA_SORENTO):
++                               CAR.HYUNDAI_IONIQ_EV_LTD, CAR.HYUNDAI_SANTA_FE_PHEV_2022, CAR.HYUNDAI_SONATA_LF, CAR.HYUNDAI_SONATA_LF_HYBRID,
++                               CAR.KIA_FORTE, CAR.KIA_NIRO_PHEV, CAR.KIA_OPTIMA_H, CAR.KIA_OPTIMA_H_G4_FL, CAR.KIA_SORENTO):
+       self.STEER_MAX = 255
+ 
+     # these cars have significantly more torque than most HKG; limit to 70% of max
+@@ -66,6 +66,11 @@ class HyundaiSafetyFlags(IntFlag):
+   CANFD_LKA_STEER_MSG_ALT = 128
+   FCEV_GAS = 256
+   ALT_LIMITS_2 = 512
++  # Personal fork (Sonata LF Hybrid): car runs standard 'hyundai' safety but WHL_SPD11 (0x386)
++  # has no valid counter/checksum. This bit tells the panda safety RX check to skip 0x386 integrity
++  # (that message only) and derive vehicle_moving from TCS13 (0x394) StandStill instead.
++  # Value MUST match HYUNDAI_PARAM_ALT_STANDSTILL in opendbc/safety/modes/hyundai_common.h.
++  ALT_STANDSTILL = 1024
+ 
+ 
+ # Hyundai/Kia/Genesis SCC (Smart Cruise Control) and steering architecture:
+@@ -324,6 +329,17 @@ class CAR(Platforms):
+     CarSpecs(mass=1536, wheelbase=2.804, steerRatio=13.27 * 1.15),  # 15% higher at the center seems reasonable
+     flags=HyundaiFlags.UNSUPPORTED_LONGITUDINAL | HyundaiFlags.TCU_GEARS,
+   )
++  # Personal fork: LF Hybrid on standard 'hyundai' safety with openpilot longitudinal.
++  # Flags = HYBRID only: NO LEGACY (so it uses standard hyundai safety + alphaLong available),
++  # NO UNSUPPORTED_LONGITUDINAL (keeps alphaLongitudinalAvailable True), NO TCU_GEARS (hybrid uses
++  # ELECT_GEAR). 0x386 integrity is relaxed via HyundaiSafetyFlags.ALT_STANDSTILL set in interface.py.
++  # steerRatio 13.27*1.15 mirrors the ICE LF and matches low-speed route estimate; refine from
++  # liveParameters.steerRatio on a highway route. mass ~1595 kg (LF Hybrid curb), owner-refinable.
++  HYUNDAI_SONATA_LF_HYBRID = HyundaiPlatformConfig(
++    [HyundaiCarDocs("Hyundai Sonata Hybrid 2018-19", car_parts=CarParts.common([CarHarness.hyundai_e]))],
++    CarSpecs(mass=1595, wheelbase=2.804, steerRatio=13.27 * 1.15),
++    flags=HyundaiFlags.HYBRID,
++  )
+   HYUNDAI_STARIA_4TH_GEN = HyundaiCanFDPlatformConfig(
+     [HyundaiCarDocs("Hyundai Staria 2023", "All", car_parts=CarParts.common([CarHarness.hyundai_k]))],
+     CarSpecs(mass=2205, wheelbase=3.273, steerRatio=11.94),  # https://www.hyundai.com/content/dam/hyundai/au/en/models/staria-load/premium-pip-update-2023/spec-sheet/STARIA_Load_Spec-Table_March_2023_v3.1.pdf
+diff --git a/opendbc/car/tests/routes.py b/opendbc/car/tests/routes.py
+index 17ac6e17..53ff8cc0 100644
+--- a/opendbc/car/tests/routes.py
++++ b/opendbc/car/tests/routes.py
+@@ -160,6 +160,7 @@ routes = [
+   CarTestRoute("c75a59efa0ecd502/2021-03-11--20-52-55", HYUNDAI.KIA_SELTOS),
+   CarTestRoute("5b7c365c50084530/2020-04-15--16-13-24", HYUNDAI.HYUNDAI_SONATA),
+   CarTestRoute("b2a38c712dcf90bd/2020-05-18--18-12-48", HYUNDAI.HYUNDAI_SONATA_LF),
++  CarTestRoute("9f9b411a57b8ce21/00000001--d6d081f0e7", HYUNDAI.HYUNDAI_SONATA_LF_HYBRID),
+   CarTestRoute("c344fd2492c7a9d2/2023-12-11--09-03-23", HYUNDAI.HYUNDAI_STARIA_4TH_GEN),
+   CarTestRoute("fb3fd42f0baaa2f8/2022-03-30--15-25-05", HYUNDAI.HYUNDAI_TUCSON),
+   CarTestRoute("db68bbe12250812c/2022-12-05--00-54-12", HYUNDAI.HYUNDAI_TUCSON_4TH_GEN),  # 2023
+diff --git a/opendbc/car/torque_data/substitute.toml b/opendbc/car/torque_data/substitute.toml
+index d530ecd3..a83c0ada 100644
+--- a/opendbc/car/torque_data/substitute.toml
++++ b/opendbc/car/torque_data/substitute.toml
+@@ -38,6 +38,7 @@ legend = ["LAT_ACCEL_FACTOR", "MAX_LAT_ACCEL_MEASURED", "FRICTION"]
+ "HYUNDAI_ELANTRA" = "HYUNDAI_SONATA_LF"
+ "HYUNDAI_ELANTRA_GT_I30" = "HYUNDAI_SONATA_LF"
+ "HYUNDAI_ELANTRA_HEV_2021" = "HYUNDAI_SONATA"
++"HYUNDAI_SONATA_LF_HYBRID" = "HYUNDAI_SONATA_LF"
+ "HYUNDAI_TUCSON" = "HYUNDAI_SANTA_FE"
+ "HYUNDAI_SANTA_FE_2022" = "HYUNDAI_SANTA_FE_HEV_2022"
+ "KIA_K5_HEV_2020" = "KIA_K5_2021"
+diff --git a/opendbc/safety/modes/hyundai.h b/opendbc/safety/modes/hyundai.h
+index b867f185..5bf2b108 100644
+--- a/opendbc/safety/modes/hyundai.h
++++ b/opendbc/safety/modes/hyundai.h
+@@ -38,11 +38,11 @@ const LongitudinalLimits HYUNDAI_LONG_LIMITS = {
+   {0x389, 0,       8, .check_relay = true},   /* SCC14 Bus 0       */ \
+   {0x4A2, 0,       2, .check_relay = false},  /* FRT_RADAR11 Bus 0 */ \
+ 
+-#define HYUNDAI_COMMON_RX_CHECKS(legacy)                                                                                                                                               \
++#define HYUNDAI_COMMON_RX_CHECKS(whl_legacy, tcs13_legacy)                                                                                                                             \
+   {.msg = {{0x260, 0, 8, 100U, .max_counter = 3U, .ignore_quality_flag = true},                                                                                           \
+            {0x371, 0, 8, 100U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }}},                                                    \
+-  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (legacy), .ignore_counter = (legacy), .max_counter = (legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
+-  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (legacy), .ignore_counter = (legacy), .max_counter = (legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}},  \
++  {.msg = {{0x386, 0, 8, 100U, .ignore_checksum = (whl_legacy), .ignore_counter = (whl_legacy), .max_counter = (whl_legacy) ? 0U : 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
++  {.msg = {{0x394, 0, 8, 100U, .ignore_checksum = (tcs13_legacy), .ignore_counter = (tcs13_legacy), .max_counter = (tcs13_legacy) ? 0U : 7U, .ignore_quality_flag = true}, { 0 }, { 0 }}}, \
+   {.msg = {{0x251, 0, 8, 50U, .ignore_checksum = true, .ignore_counter = true, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                              \
+   {.msg = {{0x4F1, 0, 4, 50U, .ignore_checksum = true, .max_counter = 15U, .ignore_quality_flag = true}, { 0 }, { 0 }}},                                                  \
+ 
+@@ -164,7 +164,7 @@ static void hyundai_rx_hook(const CANPacket_t *msg) {
+     }
+ 
+     // sample wheel speed, averaging opposite corners
+-    if (msg->addr == 0x386U) {
++    if ((msg->addr == 0x386U) && !hyundai_alt_standstill) {
+       uint32_t front_left_speed = GET_BYTES(msg, 0, 2) & 0x3FFFU;
+       uint32_t rear_right_speed = GET_BYTES(msg, 6, 2) & 0x3FFFU;
+       vehicle_moving = (front_left_speed > HYUNDAI_STANDSTILL_THRSLD) || (rear_right_speed > HYUNDAI_STANDSTILL_THRSLD);
+@@ -172,6 +172,11 @@ static void hyundai_rx_hook(const CANPacket_t *msg) {
+ 
+     if (msg->addr == 0x394U) {
+       brake_pressed = ((msg->data[5] >> 5U) & 0x3U) == 0x2U;
++      // Personal fork (Sonata LF Hybrid): 0x386 lacks integrity; TCS13.StandStill (bit 47) is the
++      // integrity-valid standstill source. StandStill == 1 means stopped (verified on owner route).
++      if (hyundai_alt_standstill) {
++        vehicle_moving = !GET_BIT(msg, 47U);
++      }
+     }
+   }
+ }
+@@ -271,15 +276,23 @@ static safety_config hyundai_init(uint16_t param) {
+   if (hyundai_longitudinal) {
+     // Use CLU11 (buttons) to manage controls allowed instead of SCC cruise state
+     static RxCheck hyundai_long_rx_checks[] = {
+-      HYUNDAI_COMMON_RX_CHECKS(false)
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
+     };
+ 
+     static RxCheck hyundai_fcev_long_rx_checks[] = {
+-      HYUNDAI_COMMON_RX_CHECKS(false)
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
+       HYUNDAI_FCEV_GAS_ADDR_CHECK
+     };
+ 
+-    if (hyundai_fcev_gas_signal) {
++    // Personal fork (Sonata LF Hybrid): WHL_SPD11 (0x386) has no valid counter/checksum on this
++    // car. Relax 0x386 integrity ONLY (0x394/TCS13 stays strict); vehicle_moving comes from TCS13.
++    static RxCheck hyundai_long_alt_standstill_rx_checks[] = {
++      HYUNDAI_COMMON_RX_CHECKS(true, false)
++    };
++
++    if (hyundai_alt_standstill) {
++      SET_RX_CHECKS(hyundai_long_alt_standstill_rx_checks, ret);
++    } else if (hyundai_fcev_gas_signal) {
+       SET_RX_CHECKS(hyundai_fcev_long_rx_checks, ret);
+     } else {
+       SET_RX_CHECKS(hyundai_long_rx_checks, ret);
+@@ -292,25 +305,34 @@ static safety_config hyundai_init(uint16_t param) {
+ 
+   } else if (hyundai_camera_scc) {
+     static RxCheck hyundai_cam_scc_rx_checks[] = {
+-      HYUNDAI_COMMON_RX_CHECKS(false)
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
+       HYUNDAI_SCC12_ADDR_CHECK(2)
+     };
+ 
+     ret = BUILD_SAFETY_CFG(hyundai_cam_scc_rx_checks, HYUNDAI_CAMERA_SCC_TX_MSGS);
+   } else {
+     static RxCheck hyundai_rx_checks[] = {
+-       HYUNDAI_COMMON_RX_CHECKS(false)
++       HYUNDAI_COMMON_RX_CHECKS(false, false)
++       HYUNDAI_SCC12_ADDR_CHECK(0)
++    };
++
++    // ALT_STANDSTILL is per-platform, not per-longitudinal-control. Keep lateral-only mode usable
++    // when Alpha Long is off by relaxing only WHL_SPD11 (0x386); SCC12 and TCS13 stay strict.
++    static RxCheck hyundai_alt_standstill_rx_checks[] = {
++       HYUNDAI_COMMON_RX_CHECKS(true, false)
+        HYUNDAI_SCC12_ADDR_CHECK(0)
+     };
+ 
+     static RxCheck hyundai_fcev_rx_checks[] = {
+-      HYUNDAI_COMMON_RX_CHECKS(false)
++      HYUNDAI_COMMON_RX_CHECKS(false, false)
+       HYUNDAI_SCC12_ADDR_CHECK(0)
+       HYUNDAI_FCEV_GAS_ADDR_CHECK
+     };
+ 
+     SET_TX_MSGS(HYUNDAI_TX_MSGS, ret);
+-    if (hyundai_fcev_gas_signal) {
++    if (hyundai_alt_standstill) {
++      SET_RX_CHECKS(hyundai_alt_standstill_rx_checks, ret);
++    } else if (hyundai_fcev_gas_signal) {
+       SET_RX_CHECKS(hyundai_fcev_rx_checks, ret);
+     } else {
+       SET_RX_CHECKS(hyundai_rx_checks, ret);
+@@ -322,7 +344,7 @@ static safety_config hyundai_init(uint16_t param) {
+ static safety_config hyundai_legacy_init(uint16_t param) {
+   // older hyundai models have less checks due to missing counters and checksums
+   static RxCheck hyundai_legacy_rx_checks[] = {
+-    HYUNDAI_COMMON_RX_CHECKS(true)
++    HYUNDAI_COMMON_RX_CHECKS(true, true)
+     HYUNDAI_SCC12_ADDR_CHECK(0)
+   };
+ 
+diff --git a/opendbc/safety/modes/hyundai_common.h b/opendbc/safety/modes/hyundai_common.h
+index 6797ae74..8b1272fe 100644
+--- a/opendbc/safety/modes/hyundai_common.h
++++ b/opendbc/safety/modes/hyundai_common.h
+@@ -42,6 +42,9 @@ bool hyundai_fcev_gas_signal = false;
+ extern bool hyundai_alt_limits_2;
+ bool hyundai_alt_limits_2 = false;
+ 
++extern bool hyundai_alt_standstill;
++bool hyundai_alt_standstill = false;
++
+ static uint8_t hyundai_last_button_interaction;  // button messages since the user pressed an enable button
+ 
+ void hyundai_common_init(uint16_t param) {
+@@ -52,6 +55,7 @@ void hyundai_common_init(uint16_t param) {
+   const uint16_t HYUNDAI_PARAM_ALT_LIMITS = 64; // TODO: shift this down with the rest of the common flags
+   const uint16_t HYUNDAI_PARAM_FCEV_GAS = 256;
+   const uint16_t HYUNDAI_PARAM_ALT_LIMITS_2 = 512;
++  const uint16_t HYUNDAI_PARAM_ALT_STANDSTILL = 1024;
+ 
+   hyundai_ev_gas_signal = GET_FLAG(param, HYUNDAI_PARAM_EV_GAS);
+   hyundai_hybrid_gas_signal = !hyundai_ev_gas_signal && GET_FLAG(param, HYUNDAI_PARAM_HYBRID_GAS);
+@@ -60,6 +64,7 @@ void hyundai_common_init(uint16_t param) {
+   hyundai_alt_limits = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS);
+   hyundai_fcev_gas_signal = GET_FLAG(param, HYUNDAI_PARAM_FCEV_GAS);
+   hyundai_alt_limits_2 = GET_FLAG(param, HYUNDAI_PARAM_ALT_LIMITS_2);
++  hyundai_alt_standstill = GET_FLAG(param, HYUNDAI_PARAM_ALT_STANDSTILL);
+ 
+   hyundai_last_button_interaction = HYUNDAI_PREV_BUTTON_SAMPLES;
+ 
+diff --git a/opendbc/safety/tests/common.py b/opendbc/safety/tests/common.py
+index 090a7fb3..7ae2ac55 100644
+--- a/opendbc/safety/tests/common.py
++++ b/opendbc/safety/tests/common.py
+@@ -1016,7 +1016,8 @@ class SafetyTest(SafetyTestBase):
+               continue
+             if attr.startswith('TestHyundaiCanfd') and current_test.startswith('TestHyundaiCanfd'):
+               continue
+-            if {attr, current_test}.issubset({'TestHyundaiLongitudinalSafety', 'TestHyundaiLongitudinalSafetyCameraSCC', 'TestHyundaiSafetyFCEVLong'}):
++            if {attr, current_test}.issubset({'TestHyundaiLongitudinalSafety', 'TestHyundaiLongitudinalSafetyAltStandstill',
++                                              'TestHyundaiLongitudinalSafetyCameraSCC', 'TestHyundaiSafetyFCEVLong'}):
+               continue
+             volkswagen_shared = ('TestVolkswagenMqb', 'TestVolkswagenMlb', 'TestVolkswagenMeb')
+             if attr.startswith(volkswagen_shared) and current_test.startswith(volkswagen_shared):
+diff --git a/opendbc/safety/tests/test_hyundai.py b/opendbc/safety/tests/test_hyundai.py
+index e53a448f..a42c3624 100755
+--- a/opendbc/safety/tests/test_hyundai.py
++++ b/opendbc/safety/tests/test_hyundai.py
+@@ -279,5 +279,103 @@ class TestHyundaiSafetyFCEVLong(TestHyundaiLongitudinalSafety, TestHyundaiSafety
+     self.safety.init_tests()
+ 
+ 
++class TestHyundaiLongitudinalSafetyAltStandstill(TestHyundaiLongitudinalSafety):
++  """
++    CAR.HYUNDAI_SONATA_LF_HYBRID (personal fork): non-legacy 'hyundai' safety with openpilot
++    longitudinal. WHL_SPD11 (0x386) has no valid counter/checksum on this car, so
++    HyundaiSafetyFlags.ALT_STANDSTILL exempts 0x386 from RX integrity and sources vehicle_moving
++    from TCS13 (0x394) StandStill instead. TCS13 keeps full integrity checks; it carries both the
++    brake (DriverOverride) and the standstill bit, so we model them together in one message.
++  """
++  cnt_tcs13 = 0
++
++  def setUp(self):
++    self.packer = CANPackerSafety("hyundai_can_generated")
++    self.safety = libsafety_py.libsafety
++    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai,
++                                 HyundaiSafetyFlags.LONG | HyundaiSafetyFlags.HYBRID_GAS |
++                                 HyundaiSafetyFlags.ALT_STANDSTILL)
++    self.safety.init_tests()
++    # TCS13 (0x394) carries both brake and standstill; track both so the two helpers emit a
++    # single consistent message instead of clobbering each other.
++    self._brake = False
++    self._standstill = True
++
++  # hybrid gas comes from E_EMS11 (0x371)
++  def _user_gas_msg(self, gas):
++    values = {"CR_Vcu_AccPedDep_Pos": gas}
++    return self.packer.make_can_msg_safety("E_EMS11", 0, values, fix_checksum=checksum)
++
++  def _tcs13_msg(self):
++    values = {"DriverOverride": 2 if self._brake else 0,
++              "StandStill": 1 if self._standstill else 0,
++              "AliveCounterTCS": self.__class__.cnt_tcs13 % 8}
++    self.__class__.cnt_tcs13 += 1
++    return self.packer.make_can_msg_safety("TCS13", 0, values, fix_checksum=checksum)
++
++  def _user_brake_msg(self, brake):
++    self._brake = bool(brake)
++    return self._tcs13_msg()
++
++  # ALT_STANDSTILL: vehicle_moving is TCS13.StandStill, not WHL_SPD11
++  def _vehicle_moving_msg(self, speed):
++    self._standstill = speed <= self.STANDSTILL_THRESHOLD
++    return self._tcs13_msg()
++
++  def _whl_spd_bad_integrity_msg(self):
++    # Mimic this car's WHL_SPD11 (0x386): frozen counter + invalid checksum (flip checksum bits).
++    values = {"WHL_SPD_%s" % s: 20.0 for s in ["FL", "FR", "RL", "RR"]}
++    values["WHL_SPD_AliveCounter_LSB"] = 0
++    values["WHL_SPD_AliveCounter_MSB"] = 0
++    def corrupt(msg):
++      addr, dat, bus = checksum(msg)
++      dat = bytearray(dat)
++      dat[5] ^= 0xC0  # WHL_SPD11 checksum bits live in byte 5 high bits -> make invalid
++      return addr, bytes(dat), bus
++    return self.packer.make_can_msg_safety("WHL_SPD11", 0, values, fix_checksum=corrupt)
++
++  def test_whl_spd_bad_integrity_allowed(self):
++    # 0x386 lacks valid counter/checksum on this car; RX must NOT drop controls under ALT_STANDSTILL
++    self.safety.set_controls_allowed(True)
++    for _ in range(10):  # > MAX_WRONG_COUNTERS
++      self.assertTrue(self._rx(self._whl_spd_bad_integrity_msg()))
++      self.assertTrue(self.safety.get_controls_allowed())
++
++  def test_non_long_whl_spd_bad_integrity_allowed(self):
++    # ALT_STANDSTILL is set per platform even when Alpha Long is off, so lateral-only safety must
++    # also relax 0x386 while keeping TCS13 as the standstill/brake source.
++    self.safety.set_safety_hooks(CarParams.SafetyModel.hyundai, HyundaiSafetyFlags.HYBRID_GAS | HyundaiSafetyFlags.ALT_STANDSTILL)
++    self.safety.init_tests()
++    self._brake = False
++    self._standstill = True
++
++    self.safety.set_controls_allowed(True)
++    for _ in range(10):  # > MAX_WRONG_COUNTERS
++      self.assertTrue(self._rx(self._whl_spd_bad_integrity_msg()))
++      self.assertTrue(self.safety.get_controls_allowed())
++
++    def bad_tcs13(msg):
++      addr, dat, bus = checksum(msg)
++      dat = bytearray(dat); dat[6] ^= 0x0F
++      return addr, bytes(dat), bus
++    msg = self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": 0}, fix_checksum=bad_tcs13)
++    self.assertFalse(self._rx(msg))
++
++  def test_tcs13_integrity_still_required(self):
++    # 0x394 must stay strict: a bad checksum on TCS13 is rejected (not relaxed by ALT_STANDSTILL)
++    def bad(msg):
++      addr, dat, bus = checksum(msg)
++      dat = bytearray(dat); dat[6] ^= 0x0F  # corrupt TCS13 checksum nibble
++      return addr, bytes(dat), bus
++    m = self.packer.make_can_msg_safety("TCS13", 0, {"AliveCounterTCS": 0}, fix_checksum=bad)
++    self.assertFalse(self._rx(m))
++
++  def test_vehicle_moving_from_tcs13(self):
++    self._rx(self._vehicle_moving_msg(0.0))
++    self.assertFalse(self.safety.get_vehicle_moving())      # StandStill=1 -> not moving
++    self._rx(self._vehicle_moving_msg(self.STANDSTILL_THRESHOLD + 1))
++    self.assertTrue(self.safety.get_vehicle_moving())       # StandStill=0 -> moving
++
++
+ if __name__ == "__main__":
+   unittest.main()

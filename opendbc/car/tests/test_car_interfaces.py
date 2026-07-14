@@ -3,6 +3,7 @@ import math
 import unittest
 import hypothesis.strategies as st
 from functools import cache
+from inspect import signature
 from hypothesis import Phase, given, settings
 from collections.abc import Callable
 from typing import Any
@@ -141,6 +142,12 @@ def _make_car_test(car_name):
 
 
 class TestCarInterfaces(unittest.TestCase):
+  def test_deinit_signature(self):
+    expected_parameters = tuple(signature(CarInterfaceBase.deinit).parameters)
+    for car_interface in set(interfaces.values()):
+      with self.subTest(car_interface=car_interface.__module__):
+        self.assertEqual(tuple(signature(car_interface.deinit).parameters), expected_parameters)
+
   def test_interface_attrs(self):
     """Asserts basic behavior of interface attribute getter"""
     num_brands = len(get_interface_attr('CAR'))
